@@ -8,7 +8,7 @@
 <title>Brineworks Funder CRM</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Public+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap">
-<link rel="stylesheet" href="styles.css">
+<link rel="stylesheet" href="styles.css?v=2">
 </head>
 <body>
 <div id="app">
@@ -20,11 +20,11 @@
       <label class="f">Password <input id="loginPassword" type="password" autocomplete="current-password" required></label>
       <button class="btn primary" type="submit" id="loginBtn">Sign in</button>
       <p class="err" id="loginErr" hidden></p>
-      <p class="fine">Page views and changes on this site are logged with your name.</p>
     </form>
   </section>
 
   <section id="shell" hidden>
+    <div class="viewas" id="viewAsBar" hidden></div>
     <header class="bar">
       <div class="brand">Brineworks <span>Funder CRM</span></div>
       <nav class="tabs" id="tabs" aria-label="Pages"></nav>
@@ -47,6 +47,6 @@
 <div id="modalRoot" hidden></div>
 <div class="toast" id="toast" hidden></div>
 <script src="config.js"></script>
-<script src="app.js"></script>
+<script src="app.js?v=2"></script>
 </body>
 </html>
