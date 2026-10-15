@@ -641,7 +641,7 @@
     const ro = !!S.viewAs;
     main.innerHTML = `
       <div class="todo-top">
-        <div class="head"><div><h1 class="page">To-dos</h1><div class="sub">${open.length} open${S.todoFilter !== "all" ? " in this view" : ""}${chips[2][2] ? ` · <span class="overdue">${chips[2][2]} overdue</span>` : ""}</div></div>
+        <div class="head"><div><h1 class="page">What we owe funders</h1><div class="sub">${open.length} open${S.todoFilter !== "all" ? " in this view" : ""}${chips[2][2] ? ` · <span class="overdue">${chips[2][2]} overdue</span>` : ""}</div></div>
           <div class="actions"><label class="chk"><input type="checkbox" id="hideDone" ${S.hideDone ? "checked" : ""}> Hide done</label><button class="btn" type="button" id="todoRefresh">Refresh</button></div></div>
         <div class="chips" id="todoChips">
           ${chips.map(([k, l, n, late]) => `<button class="chip${late && n ? " late" : ""}" type="button" data-tf="${k}" aria-pressed="${S.todoFilter === k}">${l}<span class="n">${n}</span></button>`).join("")}
@@ -651,7 +651,7 @@
       </div>
       <div class="todo-cols">
         <div class="group">
-          ${groups.filter(g => g[1].length).map(([label, list]) => `<h2 class="sec">${label}</h2><div class="list">${list.map(i => todoHtml(i, ro)).join("")}</div>`).join("") || `<div class="card empty">Nothing open${S.todoFilter !== "all" ? " in this view" : ""}. ${S.todoFilter !== "all" ? "" : "The next scan runs at 07:57 and 16:57."}</div>`}
+          ${groups.filter(g => g[1].length).map(([label, list]) => `<h2 class="sec">${label}</h2><div class="list">${list.map(i => todoHtml(i, ro)).join("")}</div>`).join("") || `<div class="card empty">Nothing open${S.todoFilter !== "all" ? " in this view" : ""}. ${S.todoFilter !== "all" ? "" : "Scans run morning and late afternoon."}</div>`}
           ${done.length && !S.hideDone ? `<details><summary class="sec" style="cursor:pointer;margin-top:8px">Done or dismissed in the last 14 days (${done.length})</summary><div class="list" style="margin-top:8px">${done.map(i => todoHtml(i, ro)).join("")}</div></details>` : ""}
         </div>
         <div class="group">
@@ -660,7 +660,7 @@
             <div class="addrow"><select class="sel" id="newTodoOwner" aria-label="Owner">${OWNERS.filter(Boolean).map(o => `<option ${o === (OWNER_ALIASES[S.user.id] || [""])[0] ? "selected" : ""}>${o}</option>`).join("")}</select><button class="btn primary" type="button" id="newTodoAdd">Add</button></div>
           </div>`}
           <div class="card"><h2 class="sec">Where these come from</h2>
-            <p class="note" style="margin:0">Claude scans new Krisp meetings and email at 07:57 and 16:57 and adds what needs doing. Ticking something off here is kept on the next scan.</p>
+            <p class="note" style="margin:0">Only follow-ups we owe investors, VCs, family offices and public funders we are in contact with. Scheduled Claude scans (Gudfinnur's at 07:57/16:57, Olga's at 08:27/17:27) read new Krisp meetings and email, drop a file in the Drive <code>inbox</code> folder, and the site merges it on the next load. Ticking something off here is kept on later scans.</p>
             <dl class="kv"><dt>Last scan</dt><dd>${esc(fmtTime(ls.finished_at))}</dd>
               <dt>Krisp up to</dt><dd>${esc(fmtTime(ls.krisp))}</dd><dt>Email up to</dt><dd>${esc(fmtTime(ls.email))}</dd>
               <dt>List saved</dt><dd>${esc(fmtTime(S.todos.saved_at))}${S.todos.saved_by ? " by " + esc(S.todos.saved_by) : ""}</dd>
@@ -698,7 +698,7 @@
     return `<div class="todo ${i.status !== "open" ? "done" : ""}">
       <input type="checkbox" data-id="${esc(i.id)}" ${i.status !== "open" ? "checked" : ""} ${ro ? "disabled" : ""} aria-label="Done">
       <div><div class="title">${esc(i.title)}</div>
-        <div class="meta">${orgHtml}${srcHtml}${i.status !== "open" && i.done_by ? `<span>${i.status === "dismissed" ? "Dismissed" : "Done"} by ${esc(i.done_by.split(" ")[0])}</span>` : ""}</div>
+        <div class="meta">${orgHtml}${srcHtml}${i.scanned_by ? `<span class="conf" title="Added by a scheduled scan">${esc(i.scanned_by.replace(/ scan$/i, ""))} scan</span>` : ""}${i.status !== "open" && i.done_by ? `<span>${i.status === "dismissed" ? "Dismissed" : "Done"} by ${esc(i.done_by.split(" ")[0])}</span>` : ""}</div>
         ${i.detail ? `<div class="detail clamp">${esc(i.detail)}</div>` : ""}</div>
       <div class="side">${i.due ? `<span class="due ${late ? "late" : ""}">${esc(i.due)}</span>` : ""}
         ${i.status === "open" && !ro ? `<select class="sel" style="padding:2px 4px;font-size:12px" data-owner="${esc(i.id)}" aria-label="Owner">${ownerOpts.map(o => `<option value="${esc(o)}" ${o === (i.owner || "") ? "selected" : ""}>${esc(o || "—")}</option>`).join("")}</select>
