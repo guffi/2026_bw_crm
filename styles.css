@@ -206,3 +206,29 @@ ul.src li{display:flex;gap:8px;align-items:baseline}
 .row-between{display:flex;flex-wrap:wrap;gap:8px;align-items:center;justify-content:space-between}
 .kbd{font-family:var(--f-mono);font-size:11px;border:1px solid var(--line);border-radius:4px;padding:0 5px;color:var(--muted)}
 .me .viewtag{font-size:11px;padding:1px 7px;border-radius:999px;background:var(--warn-soft);color:var(--warn);font-weight:600}
+/* v3: column filters */
+.colfilters{min-height:30px}
+.colfilters:empty{display:none}
+.chip.filt{gap:4px;border-color:var(--accent);background:var(--accent-soft);color:var(--accent)}
+.chip.filt b{font-weight:600}
+.chip.filt .x{margin-left:4px;padding:0 4px;border-radius:999px;font-size:14px;line-height:1}
+.chip.filt .x:hover{background:var(--accent);color:var(--accent-ink)}
+th .thlabel{display:inline-flex;align-items:center;gap:4px}
+th .sortmark{font-size:9px}
+th .fbtn{border:0;background:none;color:var(--muted);cursor:pointer;font-size:11px;padding:2px 5px;margin-left:2px;border-radius:4px;opacity:.55}
+th:hover .fbtn,th .fbtn.on{opacity:1}
+th .fbtn.on,th.filtered .thlabel{color:var(--accent)}
+.menu.fmenu{min-width:260px;max-width:320px;gap:4px}
+.menu.fmenu .fhead{display:flex;justify-content:space-between;align-items:center;padding:4px 8px 2px}
+.menu.fmenu input[type=search]{margin:2px 4px;padding:6px 8px;border:1px solid var(--line);border-radius:6px;background:var(--bg);color:var(--ink);font:inherit;font-size:13px}
+.menu.fmenu .frow{display:flex;gap:4px;padding:0 4px}
+.menu.fmenu .frow.end{justify-content:flex-end;border-top:1px solid var(--line);padding-top:6px;margin-top:2px}
+.menu.fmenu .frow button{font-size:12px;color:var(--accent);padding:4px 6px}
+.menu.fmenu .flist{max-height:280px;overflow:auto;border-top:1px solid var(--line);margin-top:2px;padding-top:4px}
+.menu.fmenu .fopt{display:flex;align-items:center;gap:8px;padding:5px 8px;border-radius:5px;cursor:pointer;font-size:13px}
+.menu.fmenu .fopt:hover{background:var(--soft)}
+.menu.fmenu .fopt span:nth-child(2){flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.menu.fmenu .fopt .n{color:var(--muted);font-size:11px;font-family:var(--f-mono)}
+.menu.fmenu .flist .empty{padding:8px;color:var(--muted);font-size:13px}
+.menu.fmenu .btn.primary{background:var(--accent);color:var(--accent-ink);border:1px solid var(--accent);padding:5px 12px;font-size:12px;border-radius:6px}
+.menu button.used{color:var(--accent)}

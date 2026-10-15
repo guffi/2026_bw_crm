@@ -24,7 +24,42 @@
   const relRank = r => { const i = REL.indexOf(r); return i < 0 ? 99 : i; };
   const fmtTime = iso => { if (!iso) return "—"; const d = new Date(iso); if (isNaN(d)) return String(iso); return d.toLocaleString(undefined, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }); };
   const ago = ms => { const m = Math.round(ms / 60000); if (m < 1) return "just now"; if (m < 60) return m + " min ago"; const h = Math.round(m / 60); return h < 24 ? h + " h ago" : Math.round(h / 24) + " d ago"; };
-  const DEFAULT_VIEW = { q: "", rel: "", cat: "", usOnly: false, hideNF: true, strip: "", sortKey: "relationship", sortDir: 1 };
+  const DEFAULT_VIEW = { q: "", cols: {}, usOnly: false, hideNF: true, strip: "", sortKey: "relationship", sortDir: 1 };
+  // Column filters (Google-Sheets style): [field, label, field group, kind]
+  const FILTER_FIELDS = [
+    ["relationship", "Relationship", "core"], ["category", "Category", "core"], ["type", "Type", "core"], ["location", "Location", "core"],
+    ["stage_focus", "Stage focus", "core"], ["lead_follow", "Lead / follow", "core"], ["tier", "Origin", "core"],
+    ["last_touch_date", "Last touch", "status", "touch"], ["last_touch_channel", "Channel", "status"],
+    ["next_step_due", "Next step due", "actions", "due"], ["owner", "Owner", "actions"], ["ball_in_court", "Ball in court", "actions"],
+    ["confidence", "Confidence", "internal"], ["intro_from", "Intro from", "internal"],
+  ];
+  const BLANK = "(blank)", NONE = "\u0000none";
+  const TOUCH_BUCKETS = ["This week", "This month", "Last 3 months", "Last year", "Older", BLANK];
+  const DUE_BUCKETS = ["Overdue", "This week", "Later", BLANK];
+  function colValue(field, r) {
+    const v = r[field];
+    if (field === "last_touch_date") {
+      if (!v) return BLANK;
+      const d = Math.round((Date.parse(today()) - Date.parse(v)) / 86400000);
+      return d <= 7 ? "This week" : d <= 31 ? "This month" : d <= 92 ? "Last 3 months" : d <= 366 ? "Last year" : "Older";
+    }
+    if (field === "next_step_due") {
+      if (!v) return BLANK;
+      const t = today(), d = Math.round((Date.parse(v) - Date.parse(t)) / 86400000);
+      return v < t ? "Overdue" : d <= 7 ? "This week" : "Later";
+    }
+    return v == null || v === "" ? BLANK : String(v);
+  }
+  function bucketOrder(field) { return field === "last_touch_date" ? TOUCH_BUCKETS : field === "next_step_due" ? DUE_BUCKETS : field === "relationship" ? REL.concat([BLANK]) : null; }
+  // Old saved views had rel/cat selects; fold them into cols.
+  function normaliseView(st) {
+    const s = Object.assign({}, st || {}); const cols = Object.assign({}, s.cols || {});
+    if (s.rel) cols.relationship = [s.rel]; if (s.cat) cols.category = [s.cat];
+    delete s.rel; delete s.cat;
+    Object.keys(cols).forEach(k => { if (!Array.isArray(cols[k]) || !cols[k].length) delete cols[k]; });
+    s.cols = cols; return s;
+  }
+  function activeCols() { return Object.keys(S.pv.cols || {}).filter(k => (S.pv.cols[k] || []).length); }
 
   const S = {
     token: store.get("crm-token"), user: null, tier: null, meta: null, prefs: {}, viewAs: null,
@@ -295,21 +330,27 @@
   function applyDefaultView() {
     const p = viewsPref();
     const v = p.default && (p.views || []).find(x => x.name === p.default);
-    S.pv = Object.assign({}, DEFAULT_VIEW, v ? v.state : {});
+    S.pv = Object.assign({}, DEFAULT_VIEW, normaliseView(v ? v.state : {}));
     S.activeView = v ? v.name : null;
   }
-  function viewState() { const s = {}; Object.keys(DEFAULT_VIEW).forEach(k => { if (S.pv[k] !== DEFAULT_VIEW[k]) s[k] = S.pv[k]; }); return s; }
-  function sameState(a, b) { return JSON.stringify(Object.assign({}, DEFAULT_VIEW, a)) === JSON.stringify(Object.assign({}, DEFAULT_VIEW, b)); }
+  function viewState() {
+    const s = {};
+    Object.keys(DEFAULT_VIEW).forEach(k => { if (JSON.stringify(S.pv[k]) !== JSON.stringify(DEFAULT_VIEW[k])) s[k] = S.pv[k]; });
+    if (s.cols) { s.cols = Object.assign({}, s.cols); Object.keys(s.cols).forEach(k => { if (!s.cols[k].length) delete s.cols[k]; }); if (!Object.keys(s.cols).length) delete s.cols; }
+    return s;
+  }
+  function canon(st) { const o = Object.assign({}, DEFAULT_VIEW, normaliseView(st)); return JSON.stringify(Object.keys(o).sort().map(k => [k, k === "cols" ? Object.keys(o.cols).sort().map(c => [c, o.cols[c].slice().sort()]) : o[k]])); }
+  function sameState(a, b) { return canon(a) === canon(b); }
   async function savePrefs(patch) {
     const r = await api("prefs_save", { prefs: patch });
     S.prefs = r.prefs || S.prefs;
   }
 
-  function matches(r) {
+  function matches(r, skipCol) {
     const v = S.pv, q = (v.q || "").toLowerCase();
     if (v.hideNF && r.relationship === "Not a funder") return false;
-    if (v.rel && r.relationship !== v.rel) return false;
-    if (v.cat && r.category !== v.cat) return false;
+    const cols = v.cols || {};
+    for (const k in cols) { if (k === skipCol || !cols[k] || !cols[k].length) continue; if (cols[k].indexOf(colValue(k, r)) < 0) return false; }
     if (v.usOnly && r.ball_in_court !== "Us") return false;
     const st = v.strip;
     if (st === "active" && r.relationship !== "Active – Series A/CLA") return false;
@@ -351,29 +392,112 @@
       ${canSaveViews ? `<div class="viewsbar"><div class="chips" id="viewChips"></div></div>` : ""}
       <div class="filters">
         <input type="search" id="q" placeholder="Search name, person, note…" aria-label="Search" value="${esc(S.pv.q || "")}">
-        <select id="fRel" aria-label="Relationship"><option value="">All relationships</option>${REL.map(r => `<option ${S.pv.rel === r ? "selected" : ""}>${esc(r)}</option>`).join("")}</select>
-        <select id="fCat" aria-label="Category"><option value="">All categories</option>${CATS.map(r => `<option ${S.pv.cat === r ? "selected" : ""}>${esc(r)}</option>`).join("")}</select>
         ${showActions ? `<label class="chk"><input type="checkbox" id="usOnly" ${S.pv.usOnly ? "checked" : ""}> We owe a reply</label>` : ""}
         <label class="chk"><input type="checkbox" id="hideNF" ${S.pv.hideNF ? "checked" : ""}> Hide non-funders</label>
         <span class="count" id="count"></span>
       </div>
+      <div class="chips colfilters" id="colFilters"></div>
       <div class="tablebox"><table class="wide"><thead><tr>
-        <th data-k="org">Organisation</th><th data-k="relationship">Relationship</th><th>Status</th><th data-k="last_touch_date">Last touch</th>
-        ${showActions ? `<th data-k="next_step_due">Next step</th><th data-k="owner">Owner</th><th data-k="ball_in_court">Ball</th>` : ""}
+        ${th("org", "Organisation", false)}${th("relationship", "Relationship")}<th>Status</th>${th("last_touch_date", "Last touch")}
+        ${showActions ? `${th("next_step_due", "Next step")}${th("owner", "Owner")}${th("ball_in_court", "Ball")}` : ""}
       </tr></thead><tbody id="rows"></tbody></table></div>`;
-    renderViewChips(); renderRows();
+    renderViewChips(); renderColFilters(); renderRows();
     main.querySelector(".strip").onclick = e => { const b = e.target.closest(".stat"); if (!b) return; S.pv.strip = S.pv.strip === b.dataset.f ? "" : b.dataset.f; viewChanged(); renderPipeline(); };
     const q = $("#q");
     q.oninput = () => { S.pv.q = q.value; viewChanged(); renderRows(); clearTimeout(S.qT); S.qT = setTimeout(() => { if (S.pv.q) track("search", { view: "pipeline", detail: S.pv.q.slice(0, 60) }); }, 1500); };
-    $("#fRel").onchange = e => { S.pv.rel = e.target.value; viewChanged(); renderRows(); };
-    $("#fCat").onchange = e => { S.pv.cat = e.target.value; viewChanged(); renderRows(); };
     if ($("#usOnly")) $("#usOnly").onchange = e => { S.pv.usOnly = e.target.checked; viewChanged(); renderRows(); };
     $("#hideNF").onchange = e => { S.pv.hideNF = e.target.checked; viewChanged(); renderRows(); };
-    main.querySelector("thead").onclick = e => { const th = e.target.closest("th[data-k]"); if (!th) return; const k = th.dataset.k; if (S.pv.sortKey === k) S.pv.sortDir *= -1; else { S.pv.sortKey = k; S.pv.sortDir = k === "last_touch_date" ? -1 : 1; } viewChanged(); renderRows(); };
+    main.querySelector("thead").onclick = e => {
+      const fb = e.target.closest("[data-filter]"); if (fb) { e.stopPropagation(); openColFilter(fb.dataset.filter, fb); return; }
+      const th = e.target.closest("th[data-k]"); if (!th) return; const k = th.dataset.k; if (S.pv.sortKey === k) S.pv.sortDir *= -1; else { S.pv.sortKey = k; S.pv.sortDir = k === "last_touch_date" ? -1 : 1; } viewChanged(); renderRows();
+    };
     $("#rows").onclick = e => { const tr = e.target.closest("tr[data-id]"); if (tr) openDrawer(tr.dataset.id); };
     $("#rows").onkeydown = e => { if (e.key === "Enter") { const tr = e.target.closest("tr[data-id]"); if (tr) openDrawer(tr.dataset.id); } };
     if ($("#csvBtn")) $("#csvBtn").onclick = exportCsv;
     if ($("#addBtn")) $("#addBtn").onclick = addFunder;
+  }
+
+  /* ---------- column filters ---------- */
+  function th(k, label, filterable) {
+    const on = (S.pv.cols[k] || []).length;
+    const sorted = S.pv.sortKey === k ? `<span class="sortmark">${S.pv.sortDir > 0 ? "▲" : "▼"}</span>` : "";
+    return `<th data-k="${k}"${on ? ' class="filtered"' : ""}><span class="thlabel">${esc(label)}${sorted}</span>${filterable === false ? "" : `<button type="button" class="fbtn${on ? " on" : ""}" data-filter="${k}" aria-label="Filter ${esc(label)}" title="Filter">${on ? "▼" : "▽"}</button>`}</th>`;
+  }
+  function filterFields() { return FILTER_FIELDS.filter(f => canView(f[2])); }
+  function renderColFilters() {
+    const box = $("#colFilters"); if (!box) return;
+    const fields = filterFields(), active = activeCols().filter(k => fields.some(f => f[0] === k));
+    box.innerHTML = active.map(k => {
+      const f = fields.find(x => x[0] === k), vals = S.pv.cols[k].filter(v => v !== NONE);
+      const txt = !vals.length ? "none" : vals.length <= 2 ? vals.join(", ") : `${vals.length} values`;
+      return `<button class="chip filt" type="button" data-col="${k}" aria-pressed="true"><b>${esc(f[1])}:</b> ${esc(txt)}<span class="x" data-clear="${k}" title="Remove filter">×</span></button>`;
+    }).join("") + `<button class="chip ghost" type="button" id="addFilterBtn">+ Filter</button>${active.length > 1 ? `<button class="chip ghost" type="button" id="clearFiltersBtn">Clear all</button>` : ""}`;
+    $$("[data-col]", box).forEach(b => b.onclick = e => { const x = e.target.closest("[data-clear]"); if (x) { setCol(x.dataset.clear, []); return; } openColFilter(b.dataset.col, b); });
+    $("#addFilterBtn").onclick = e => addFilterMenu(e.currentTarget);
+    const cb = $("#clearFiltersBtn"); if (cb) cb.onclick = () => { S.pv.cols = {}; viewChanged(); renderPipeline(); };
+  }
+  function setCol(k, vals) {
+    S.pv.cols = Object.assign({}, S.pv.cols); if (vals.length) S.pv.cols[k] = vals; else delete S.pv.cols[k];
+    viewChanged(); renderColFilters(); renderRows();
+    const h = $(`th[data-k="${k}"]`); if (h) { h.classList.toggle("filtered", !!vals.length); const b = h.querySelector(".fbtn"); if (b) { b.classList.toggle("on", !!vals.length); b.textContent = vals.length ? "▼" : "▽"; } }
+  }
+  function popover(anchor, cls) {
+    $$(".menu").forEach(m => m.remove());
+    const m = document.createElement("div"); m.className = "menu " + (cls || "");
+    const r = anchor.getBoundingClientRect();
+    m.style.left = Math.max(8, Math.min(r.left + window.scrollX, window.innerWidth - 300)) + "px"; m.style.top = (r.bottom + window.scrollY + 4) + "px";
+    document.body.appendChild(m);
+    const close = () => { m.remove(); document.removeEventListener("mousedown", onDoc, true); document.removeEventListener("keydown", onKey, true); };
+    const onDoc = e => { if (!m.contains(e.target)) close(); };
+    const onKey = e => { if (e.key === "Escape") close(); };
+    setTimeout(() => { document.addEventListener("mousedown", onDoc, true); document.addEventListener("keydown", onKey, true); }, 0);
+    m.close = close; return m;
+  }
+  function addFilterMenu(anchor) {
+    const m = popover(anchor);
+    const used = activeCols();
+    m.innerHTML = filterFields().map(f => `<button type="button" data-f="${f[0]}" ${used.indexOf(f[0]) >= 0 ? 'class="used"' : ""}>${esc(f[1])}${used.indexOf(f[0]) >= 0 ? " ✓" : ""}</button>`).join("");
+    m.onclick = e => { const b = e.target.closest("[data-f]"); if (!b) return; m.close(); openColFilter(b.dataset.f, anchor); };
+  }
+  function openColFilter(k, anchor) {
+    const f = FILTER_FIELDS.find(x => x[0] === k); if (!f || !canView(f[2])) return;
+    const m = popover(anchor, "fmenu");
+    // counts over rows that pass every other filter (as in Sheets)
+    const base = S.rows.filter(r => matches(r, k));
+    const counts = {}; base.forEach(r => { const v = colValue(k, r); counts[v] = (counts[v] || 0) + 1; });
+    const allVals = {}; S.rows.forEach(r => { allVals[colValue(k, r)] = 1; });
+    const order = bucketOrder(k);
+    let vals = Object.keys(allVals);
+    vals.sort((a, b) => order ? order.indexOf(a) - order.indexOf(b) : a === BLANK ? 1 : b === BLANK ? -1 : a.localeCompare(b));
+    let sel = (S.pv.cols[k] || []).slice();
+    const sortable = ["org", "relationship", "last_touch_date", "next_step_due", "owner", "ball_in_court"].indexOf(k) >= 0;
+    m.innerHTML = `<div class="fhead"><b>${esc(f[1])}</b><span class="conf" id="fsel"></span></div>
+      ${sortable ? `<div class="frow"><button type="button" data-sort="1">Sort A → Z</button><button type="button" data-sort="-1">Sort Z → A</button></div>` : ""}
+      <input type="search" id="fq" placeholder="Search values" aria-label="Search values">
+      <div class="frow"><button type="button" id="fAll">Select all</button><button type="button" id="fNone">Clear</button></div>
+      <div class="flist" id="flist"></div>
+      <div class="frow end"><button type="button" class="btn primary small" id="fDone">Done</button></div>`;
+    const list = m.querySelector("#flist"), fq = m.querySelector("#fq"), fsel = m.querySelector("#fsel");
+    const visible = () => { const q = fq.value.trim().toLowerCase(); return vals.filter(v => !q || v.toLowerCase().indexOf(q) >= 0); };
+    const draw = () => {
+      list.innerHTML = visible().map(v => `<label class="fopt"><input type="checkbox" value="${esc(v)}" ${!sel.length || sel.indexOf(v) >= 0 ? "checked" : ""}><span>${esc(v)}</span><span class="n">${counts[v] || 0}</span></label>`).join("") || `<div class="empty">No values</div>`;
+      fsel.textContent = sel.length ? `${sel.filter(v => v !== NONE).length} of ${vals.length}` : "all";
+    };
+    const apply = () => { setCol(k, sel.length === vals.length ? [] : sel); };
+    draw();
+    fq.oninput = draw;
+    list.onchange = e => {
+      const cb = e.target; if (cb.type !== "checkbox") return;
+      if (!sel.length) sel = vals.slice();               // "all" was implicit; make it explicit before removing
+      if (cb.checked) { if (sel.indexOf(cb.value) < 0) sel.push(cb.value); } else sel = sel.filter(v => v !== cb.value);
+      sel = sel.filter(v => v !== NONE); if (!sel.length) sel = [NONE];
+      apply(); fsel.textContent = sel.length ? `${sel.filter(v => v !== NONE).length} of ${vals.length}` : "all";
+    };
+    m.querySelector("#fAll").onclick = () => { sel = []; apply(); draw(); };
+    m.querySelector("#fNone").onclick = () => { sel = [NONE]; apply(); draw(); };
+    m.querySelector("#fDone").onclick = () => m.close();
+    $$("[data-sort]", m).forEach(b => b.onclick = () => { S.pv.sortKey = k; S.pv.sortDir = +b.dataset.sort; viewChanged(); m.close(); renderPipeline(); });
+    setTimeout(() => fq.focus(), 0);
   }
 
   function viewChanged() {
@@ -393,7 +517,7 @@
     $$("[data-view]", box).forEach(b => b.onclick = () => {
       const name = b.dataset.view;
       if (!name) { S.pv = Object.assign({}, DEFAULT_VIEW); S.activeView = null; }
-      else { const v = views.find(x => x.name === name); if (!v) return; S.pv = Object.assign({}, DEFAULT_VIEW, v.state); S.activeView = name; }
+      else { const v = views.find(x => x.name === name); if (!v) return; S.pv = Object.assign({}, DEFAULT_VIEW, normaliseView(v.state)); S.activeView = name; }
       renderPipeline();
     });
     $("#saveViewBtn").onclick = saveViewDialog;
@@ -403,7 +527,7 @@
   function saveViewDialog() {
     const p = viewsPref(), views = p.views || [];
     openModal(`<h2>${S.activeView ? "Update view" : "Save this view"}</h2>
-      <p class="sub" style="margin:0">Saves the current search, filters, sort and the selected tile under a name you can pick from the chips. Only you see your views.</p>
+      <p class="sub" style="margin:0">Saves the current search, column filters, sort and the selected tile under a name you can pick from the chips. Only you see your views.</p>
       <label class="f">Name <input id="vwName" type="text" value="${esc(S.activeView || "")}" maxlength="40" placeholder="e.g. My follow-ups"></label>
       <label class="chk"><input type="checkbox" id="vwDefault" ${(S.activeView && p.default === S.activeView) ? "checked" : ""}> Open the pipeline with this view</label>
       <div class="actions"><button class="btn primary" type="button" id="vwSave">Save view</button><button class="btn" type="button" data-close>Cancel</button></div>`);
