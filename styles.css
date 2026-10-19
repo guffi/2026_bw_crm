@@ -232,3 +232,23 @@ th .fbtn.on,th.filtered .thlabel{color:var(--accent)}
 .menu.fmenu .flist .empty{padding:8px;color:var(--muted);font-size:13px}
 .menu.fmenu .btn.primary{background:var(--accent);color:var(--accent-ink);border:1px solid var(--accent);padding:5px 12px;font-size:12px;border-radius:6px}
 .menu button.used{color:var(--accent)}
+
+/* backchannel: who can make an intro */
+.bcline{display:flex;width:100%;justify-content:flex-start;flex-wrap:wrap;gap:4px;margin-top:4px}
+.bc{display:inline-flex;align-items:center;gap:3px;font-size:11.5px;font-weight:500;padding:1px 7px;border-radius:999px;background:var(--idle-soft);color:var(--muted)}
+.bc i{font-style:normal;font-family:var(--f-mono);font-size:10px;opacity:.85}
+.bc.s-strong{background:var(--good-soft);color:var(--good)}
+.bc.s-medium{background:var(--info-soft);color:var(--info)}
+.bc.s-weak{background:var(--warn-soft);color:var(--warn)}
+.bc.me{outline:1px solid currentColor}
+.bclist{list-style:none;margin:0 0 6px;padding:0;display:flex;flex-direction:column;gap:6px}
+.bcrow{display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:6px 10px}
+.bcname{font-weight:500;min-width:0;overflow-wrap:anywhere}
+.bcctl{display:inline-flex;flex-wrap:wrap;gap:6px;align-items:center}
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:7px;overflow:hidden}
+.segb{border:0;background:var(--surface);padding:4px 9px;font-size:12.5px;cursor:pointer;color:var(--muted)}
+.segb+.segb{border-left:1px solid var(--line)}
+.segb:hover{color:var(--ink)}
+.segb.on[data-bcs="strong"]{background:var(--good-soft);color:var(--good);font-weight:600}
+.segb.on[data-bcs="medium"]{background:var(--info-soft);color:var(--info);font-weight:600}
+.segb.on[data-bcs="weak"]{background:var(--warn-soft);color:var(--warn);font-weight:600}

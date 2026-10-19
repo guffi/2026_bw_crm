@@ -18,6 +18,10 @@
   const CHANNELS = ["", "Email", "Meeting", "Call", "Notes", "Logged", "Sheet"];
   const BALL = ["None", "Us", "Them"];
   const CONF = ["", "High", "Medium", "Low"];
+  const FIT = ["", "High", "Medium-High", "Medium", "Low-Medium", "Low"];
+  const BC_STRENGTHS = ["strong", "medium", "weak"];
+  const bcLabel = e => (e.name || "?") + (e.strength ? " · " + e.strength : "");
+  const bcMine = e => S.user && (e.user_id ? e.user_id === S.user.id : String(e.name || "").toLowerCase() === String(S.user.name || "").toLowerCase());
   const OWNERS = ["", "GS", "JTP", "Olga", "Sam", "Ariana"];
   const OWNER_ALIASES = { gudfinnur: ["GS", "Gudfinnur"], joe: ["JTP", "Joe", "Joseph"], olga: ["Olga", "OM"] };
   const relClass = r => r === "Active – Series A/CLA" ? "p-active" : r === "Existing investor" ? "p-existing" : r === "Warm" ? "p-warm" : String(r || "").startsWith("Grant") ? "p-grant" : r === "Passed" ? "p-passed" : "p-idle";
@@ -29,6 +33,7 @@
   const FILTER_FIELDS = [
     ["relationship", "Relationship", "core"], ["category", "Category", "core"], ["type", "Type", "core"], ["location", "Location", "core"],
     ["stage_focus", "Stage focus", "core"], ["lead_follow", "Lead / follow", "core"], ["tier", "Origin", "core"],
+    ["investor_fit", "Investor fit", "core"], ["campaigns", "Campaign", "core", "multi"], ["backchannel", "Backchannel", "backchannel", "multi"],
     ["last_touch_date", "Last touch", "status", "touch"], ["last_touch_channel", "Channel", "status"],
     ["next_step_due", "Next step due", "actions", "due"], ["owner", "Owner", "actions"], ["ball_in_court", "Ball in court", "actions"],
     ["confidence", "Confidence", "internal"], ["intro_from", "Intro from", "internal"],
@@ -50,7 +55,13 @@
     }
     return v == null || v === "" ? BLANK : String(v);
   }
-  function bucketOrder(field) { return field === "last_touch_date" ? TOUCH_BUCKETS : field === "next_step_due" ? DUE_BUCKETS : field === "relationship" ? REL.concat([BLANK]) : null; }
+  /** Every filter value a row has: one for plain fields, several for list fields (campaigns, backchannel people). */
+  function colValues(field, r) {
+    if (field === "campaigns") { const v = (r.campaigns || []).filter(Boolean); return v.length ? v : [BLANK]; }
+    if (field === "backchannel") { const v = (r.backchannel || []).map(e => e && e.name).filter(Boolean); return v.length ? v : [BLANK]; }
+    return [colValue(field, r)];
+  }
+  function bucketOrder(field) { return field === "last_touch_date" ? TOUCH_BUCKETS : field === "next_step_due" ? DUE_BUCKETS : field === "relationship" ? REL.concat([BLANK]) : field === "investor_fit" ? FIT.slice(1).concat([BLANK]) : null; }
   // Old saved views had rel/cat selects; fold them into cols.
   function normaliseView(st) {
     const s = Object.assign({}, st || {}); const cols = Object.assign({}, s.cols || {});
@@ -350,7 +361,7 @@
     const v = S.pv, q = (v.q || "").toLowerCase();
     if (v.hideNF && r.relationship === "Not a funder") return false;
     const cols = v.cols || {};
-    for (const k in cols) { if (k === skipCol || !cols[k] || !cols[k].length) continue; if (cols[k].indexOf(colValue(k, r)) < 0) return false; }
+    for (const k in cols) { if (k === skipCol || !cols[k] || !cols[k].length) continue; if (!colValues(k, r).some(x => cols[k].indexOf(x) >= 0)) return false; }
     if (v.usOnly && r.ball_in_court !== "Us") return false;
     const st = v.strip;
     if (st === "active" && r.relationship !== "Active – Series A/CLA") return false;
@@ -359,8 +370,10 @@
     if (st === "grants" && !String(r.relationship || "").startsWith("Grant")) return false;
     if (st === "us" && r.ball_in_court !== "Us") return false;
     if (st === "overdue" && !(r.next_step_due && r.next_step_due < today())) return false;
+    if (st === "mybc" && !(r.backchannel || []).some(bcMine)) return false;
+    if (st === "nobc" && (r.backchannel || []).length) return false;
     if (q) {
-      const hay = [r.org, (r.aliases || []).join(" "), r.type, r.location, r.status_summary, r.next_step, r.notes, r.intro_from, (r.contacts || []).map(c => (c.name || "") + " " + (c.email || "")).join(" ")].join(" ").toLowerCase();
+      const hay = [r.org, (r.aliases || []).join(" "), r.type, r.location, r.parent_group, r.status_summary, r.next_step, r.notes, r.intro_from, (r.campaigns || []).join(" "), (r.backchannel || []).map(e => e.name).join(" "), (r.contacts || []).map(c => (c.name || "") + " " + (c.email || "")).join(" ")].join(" ").toLowerCase();
       if (hay.indexOf(q) < 0) return false;
     }
     return true;
@@ -384,6 +397,10 @@
     const c = k => S.rows.filter(k).length;
     const stats = [["active", "Active round", c(r => r.relationship === "Active – Series A/CLA")], ["existing", "Existing investors", c(r => r.relationship === "Existing investor")], ["warm", "Warm", c(r => r.relationship === "Warm")], ["grants", "Grants", c(r => String(r.relationship || "").startsWith("Grant"))]];
     if (showActions) stats.push(["us", "We owe a reply", c(r => r.ball_in_court === "Us")], ["overdue", "Next step overdue", c(r => r.next_step_due && r.next_step_due < today())]);
+    if (canView("backchannel")) {
+      stats.push(["mybc", "I can intro", c(r => (r.backchannel || []).some(bcMine))]);
+      if (S.tier.admin_page) stats.push(["nobc", "No backchannel yet", c(r => !(r.backchannel || []).length && r.relationship !== "Not a funder")]);
+    }
     const canSaveViews = !S.viewAs;
     main.innerHTML = `
       <div class="head"><div><h1 class="page">Pipeline</h1><div class="sub">${esc(S.tier.label)} view${S.tier.edit.length && !S.viewAs ? " · click a row to edit" : " · read only"}</div></div>
@@ -464,8 +481,8 @@
     const m = popover(anchor, "fmenu");
     // counts over rows that pass every other filter (as in Sheets)
     const base = S.rows.filter(r => matches(r, k));
-    const counts = {}; base.forEach(r => { const v = colValue(k, r); counts[v] = (counts[v] || 0) + 1; });
-    const allVals = {}; S.rows.forEach(r => { allVals[colValue(k, r)] = 1; });
+    const counts = {}; base.forEach(r => colValues(k, r).forEach(v => { counts[v] = (counts[v] || 0) + 1; }));
+    const allVals = {}; S.rows.forEach(r => colValues(k, r).forEach(v => { allVals[v] = 1; }));
     const order = bucketOrder(k);
     let vals = Object.keys(allVals);
     vals.sort((a, b) => order ? order.indexOf(a) - order.indexOf(b) : a === BLANK ? 1 : b === BLANK ? -1 : a.localeCompare(b));
@@ -576,6 +593,12 @@
     };
   }
 
+  function bcCell(r) {
+    const list = canView("backchannel") ? (r.backchannel || []) : [];
+    if (!list.length) return "";
+    return `<span class="bcline" title="Backchannel">${list.map(e => `<span class="bc${bcMine(e) ? " me" : ""}${e.strength ? " s-" + esc(e.strength) : ""}">${esc(e.name.split(" ")[0])}${e.strength ? `<i>${esc(e.strength[0].toUpperCase())}</i>` : ""}</span>`).join("")}</span>`;
+  }
+
   function renderRows() {
     const showActions = canView("actions");
     const list = S.rows.filter(matches).sort(cmp);
@@ -584,7 +607,7 @@
     $("#rows").innerHTML = list.length ? list.map(r => {
       const od = r.next_step_due && r.next_step_due < today();
       return `<tr class="click" tabindex="0" data-id="${esc(r.id)}">
-        <td class="org">${esc(r.org)}<span class="t">${esc([r.type, r.location].filter(Boolean).join(" · "))}</span></td>
+        <td class="org">${esc(r.org)}<span class="t">${esc([r.type, r.location].filter(Boolean).join(" · "))}</span>${bcCell(r)}</td>
         <td><span class="pill ${relClass(r.relationship)}">${esc(r.relationship || "—")}</span>${r.confidence ? `<div class="conf">${esc(r.confidence)}${r.tier === "Imported" ? " · imported" : ""}</div>` : ""}</td>
         <td class="sum"><div class="clamp">${esc(r.status_summary || "")}</div></td>
         <td class="date">${esc(r.last_touch_date || "—")}<div class="conf">${esc(r.last_touch_channel || "")}</div></td>
@@ -596,10 +619,11 @@
 
   /* ---------- drawer ---------- */
   const FIELDS = {
-    core: [["org", "Name", "text", "wide"], ["relationship", "Relationship", REL], ["category", "Category", CATS], ["type", "Type", "text"], ["location", "Location", "text"], ["ticket_size", "Ticket size", "text"], ["stage_focus", "Stage focus", "text"], ["lead_follow", "Lead / follow", "text"], ["rounds", "Rounds (comma separated)", "list", "wide"], ["aliases", "Other names (comma separated)", "list", "wide"]],
+    core: [["org", "Name", "text", "wide"], ["relationship", "Relationship", REL], ["category", "Category", CATS], ["type", "Type", "text"], ["location", "Location", "text"], ["ticket_size", "Ticket size", "text"], ["stage_focus", "Stage focus", "text"], ["lead_follow", "Lead / follow", "text"], ["rounds", "Rounds (comma separated)", "list", "wide"], ["aliases", "Other names (comma separated)", "list", "wide"],
+      ["parent_group", "Parent group", "text"], ["investor_fit", "Investor fit", FIT], ["fit_note", "Why it fits", "area", "wide"], ["strategic_angle", "Strategic angle (pilot, offtake, partner)", "area", "wide"], ["campaigns", "Campaigns / lists (comma separated)", "list", "wide"]],
     status: [["status_summary", "Status", "area", "wide"], ["last_touch_date", "Last touch", "date"], ["last_touch_channel", "Channel", CHANNELS], ["last_touch_note", "Last touch note", "text", "wide"]],
     actions: [["next_step", "Next step", "text", "wide"], ["next_step_due", "Due", "date"], ["owner", "Owner", OWNERS], ["ball_in_court", "Ball in court", BALL]],
-    contacts: [["contacts", "People — one per line: Name | role | email", "contacts", "wide"]],
+    contacts: [["contacts", "People — one per line: Name | role | email | LinkedIn", "contacts", "wide"]],
     internal: [["notes", "Notes", "area", "wide"], ["objections", "Objections", "area", "wide"], ["intro_from", "Intro from", "text"], ["first_contact_date", "First contact", "date"], ["confidence", "Confidence", CONF]],
     sources: [["sources", "Sources — one per line: type | label | link or ref | date", "sources", "wide"]],
   };
@@ -608,16 +632,17 @@
   function fieldValue(r, f, kind) {
     const v = r[f];
     if (kind === "list") return (v || []).join(", ");
-    if (kind === "contacts") return (v || []).filter(c => c && (c.name || c.email)).map(c => [c.name || "", c.role || "", c.email || ""].join(" | ")).join("\n");
+    if (kind === "contacts") return (v || []).filter(c => c && (c.name || c.email)).map(c => [c.name || "", c.role || "", c.email || ""].concat(c.linkedin ? [c.linkedin] : []).join(" | ")).join("\n");
     if (kind === "sources") return (v || []).map(s => [s.type || "", s.label || "", s.ref || "", s.date || ""].join(" | ")).join("\n");
     return v == null ? "" : v;
   }
   function parseField(kind, text) {
     if (kind === "list") return text.split(",").map(s => s.trim()).filter(Boolean);
-    if (kind === "contacts") return text.split("\n").map(l => l.split("|").map(s => s.trim())).filter(p => p[0] || p[2]).map(p => ({ name: p[0] || "", role: p[1] || "", email: p[2] || "" }));
+    if (kind === "contacts") return text.split("\n").map(l => l.split("|").map(s => s.trim())).filter(p => p[0] || p[2]).map(p => Object.assign({ name: p[0] || "", role: p[1] || "", email: p[2] || "" }, p[3] ? { linkedin: p[3] } : {}));
     if (kind === "sources") return text.split("\n").map(l => l.split("|").map(s => s.trim())).filter(p => p[1] || p[2]).map(p => ({ type: p[0] || "note", label: p[1] || "", ref: p[2] || "", date: p[3] || null }));
     return text === "" ? null : text;
   }
+  function liLink(c) { return c && /^https?:\/\/([a-z]+\.)?linkedin\.com\//i.test(c.linkedin || "") ? ` · <a href="${esc(c.linkedin)}" target="_blank" rel="noopener noreferrer">LinkedIn</a>` : ""; }
   function srcLink(s) {
     const ref = s.ref || "", label = esc(s.label || ref);
     if (/^https?:\/\//.test(ref)) return `<a href="${esc(ref)}" target="_blank" rel="noopener noreferrer">${label}</a>`;
@@ -632,7 +657,7 @@
       if (!canView(g)) return "";
       const edit = canEdit(g);
       if (!edit) {
-        if (g === "contacts") { const cs = (r.contacts || []).filter(c => c && (c.name || c.email)); return `<div class="secbox"><h3>People</h3>${cs.length ? `<dl class="kv">${cs.map(c => `<dt>${esc(c.name || "—")}</dt><dd>${esc([c.role, c.email].filter(Boolean).join(" · ") || "—")}</dd>`).join("")}</dl>` : `<div class="sub">No contacts recorded.</div>`}</div>`; }
+        if (g === "contacts") { const cs = (r.contacts || []).filter(c => c && (c.name || c.email)); return `<div class="secbox"><h3>People</h3>${cs.length ? `<dl class="kv">${cs.map(c => `<dt>${esc(c.name || "—")}</dt><dd>${esc([c.role, c.email].filter(Boolean).join(" · ") || "—")}${liLink(c)}</dd>`).join("")}</dl>` : `<div class="sub">No contacts recorded.</div>`}</div>`; }
         if (g === "sources") { const ss = r.sources || []; return `<div class="secbox"><h3>Sources</h3>${ss.length ? `<ul class="src">${ss.map(s => `<li><span class="tag">${esc(s.type || "")}</span><span>${srcLink(s)} <span class="ref">${esc(s.date || "")}</span></span></li>`).join("")}</ul>` : `<div class="sub">None.</div>`}</div>`; }
         return `<div class="secbox"><h3>${GROUP_TITLES[g]}</h3><dl class="kv">${FIELDS[g].filter(([f]) => f !== "org").map(([f, label, kind]) => `<dt>${esc(label.split(" (")[0].split(" —")[0])}</dt><dd>${esc(fieldValue(r, f, kind) || "—")}</dd>`).join("")}</dl></div>`;
       }
@@ -645,6 +670,7 @@
         return `<label class="f ${wide || ""}">${esc(label)} ${ctl}</label>`;
       }).join("");
       let extra = "";
+      if (g === "contacts" && (r.contacts || []).some(c => c && c.linkedin)) extra = `<div class="sub" style="margin-top:6px">${r.contacts.filter(c => c && c.linkedin).map(c => esc(c.name || "?") + liLink(c)).join("<br>")}</div>`;
       if (g === "sources" && (r.sources || []).some(s => /^https?:\/\//.test(s.ref || ""))) extra = `<ul class="src" style="margin-top:6px">${r.sources.filter(s => /^https?:\/\//.test(s.ref || "")).map(s => `<li><span class="tag">${esc(s.type || "")}</span><span>${srcLink(s)}</span></li>`).join("")}</ul>`;
       return `<div class="secbox"><h3>${GROUP_TITLES[g]}</h3><div class="grid2">${inputs}</div>${extra}</div>`;
     };
@@ -657,6 +683,7 @@
           <button class="btn" type="button" data-close>Close</button></div>
         <div class="dbody">
           <div class="actions">${canEdit("status") ? `<button class="btn primary small" type="button" id="touchBtn">Log a touch today</button>` : ""}<span class="state" id="saveState">${S.tier.edit.length && !S.viewAs ? "Changes save as you go" : ""}</span></div>
+          <div id="bcBox">${bcSection(r)}</div>
           ${["actions", "status", "core", "contacts", "internal"].map(groupHtml).join("")}
           ${conflicts}
           ${groupHtml("sources")}
@@ -664,6 +691,7 @@
         </div>
       </aside>`;
     root.hidden = false;
+    wireBc(id);
     $$("[data-f]", root).forEach(el => el.addEventListener("change", () => queueEdit(id, el.dataset.f, parseField(el.dataset.kind, el.value))));
     if ($("#touchBtn")) $("#touchBtn").onclick = () => {
       const d = today(); const inp = root.querySelector('[data-f="last_touch_date"]'); if (inp) inp.value = d;
@@ -676,6 +704,50 @@
     });
     const closeBtn = root.querySelector(".drawer [data-close]"); if (closeBtn) closeBtn.focus();
   }
+  /* ---------- backchannel ---------- */
+  function bcSection(r) {
+    if (!canView("backchannel")) return "";
+    const list = r.backchannel || [], edit = canEdit("backchannel"), admin = edit && S.tier.admin_page;
+    const mine = list.find(bcMine);
+    const seg = (cur, attrs) => BC_STRENGTHS.map(s => `<button type="button" class="segb${cur === s ? " on" : ""}" data-bcs="${s}" ${attrs}>${s[0].toUpperCase() + s.slice(1)}</button>`).join("");
+    const rows = list.map((e, i) => {
+      const self = bcMine(e);
+      const ctl = admin || self ? `<span class="seg">${seg(e.strength, `data-bci="${i}"`)}</span><button type="button" class="btn small" data-bcrm="${i}" title="${self ? "I can’t intro here" : "Remove"}">${self ? "Not me" : "Remove"}</button>` : `<span class="conf">${esc(e.strength || "strength not set")}</span>`;
+      return `<li class="bcrow"><span class="bcname">${esc(e.name)}${self ? ' <span class="conf">(you)</span>' : ""}${e.note ? `<span class="conf"> · ${esc(e.note)}</span>` : ""}</span><span class="bcctl">${ctl}</span></li>`;
+    }).join("");
+    const me = edit && !mine ? `<div class="actions"><span class="sub">I can intro here:</span><span class="seg">${seg(null, 'data-bcme="1"')}</span></div>` : "";
+    const add = admin ? `<div class="actions"><input type="text" id="bcName" placeholder="Add someone (name)" aria-label="Backchannel name" style="flex:1;min-width:140px"><select id="bcStr" aria-label="Strength"><option value="">Strength…</option>${BC_STRENGTHS.map(s => `<option>${s}</option>`).join("")}</select><button class="btn small" type="button" id="bcAdd">Add</button></div>` : "";
+    return `<div class="secbox bcbox"><h3>Backchannel — who can intro</h3>
+      ${list.length ? `<ul class="bclist">${rows}</ul>` : `<div class="sub">Nobody yet.</div>`}
+      ${me}${add}
+      ${edit && !admin ? `<div class="conf">Mark how well you know them. Several people can be listed per fund.</div>` : ""}<span class="state" id="bcState"></span></div>`;
+  }
+  function wireBc(id) {
+    const box = $("#bcBox"); if (!box) return;
+    const r = () => S.rows.find(x => x.id === id);
+    const send = async (body, label) => {
+      if (S.viewAs) { toast("You are viewing as another tier.", "err"); return; }
+      setState($("#bcState"), "Saving…", "busy");
+      try {
+        const res = await api("backchannel_set", Object.assign({ id }, body));
+        const i = S.rows.findIndex(x => x.id === id);
+        if (i >= 0 && res.row) S.rows[i] = Object.assign({}, S.rows[i], { backchannel: res.row.backchannel || [], updated_at: res.row.updated_at, updated_by: res.row.updated_by });
+        S.meta = res.meta; writeCache(); stamp();
+        box.innerHTML = bcSection(r()); wireBc(id); setState($("#bcState"), label || "Saved ✓", "ok");
+        if (S.view === "pipeline" && $("#rows")) renderRows();
+        track("backchannel", { view: S.view, target: id, detail: JSON.stringify(body).slice(0, 80) });
+      } catch (e) { setState($("#bcState"), "Not saved: " + e.message, "err"); }
+    };
+    const target = i => { const e = (r().backchannel || [])[+i]; return !e ? {} : bcMine(e) ? {} : e.user_id ? { user_id: e.user_id } : { name: e.name }; };
+    box.onclick = e => {
+      const b = e.target.closest("button"); if (!b) return;
+      if (b.dataset.bcme) return send({ strength: b.dataset.bcs });
+      if (b.dataset.bci !== undefined) { const ent = (r().backchannel || [])[+b.dataset.bci]; return send(Object.assign(target(b.dataset.bci), { strength: ent && ent.strength === b.dataset.bcs ? null : b.dataset.bcs })); }
+      if (b.dataset.bcrm !== undefined) return send(Object.assign(target(b.dataset.bcrm), { remove: true }), "Removed ✓");
+      if (b.id === "bcAdd") { const nm = $("#bcName").value.trim(); if (!nm) { toast("Type a name first.", "err"); return; } return send({ name: nm, strength: $("#bcStr").value || null }, "Added ✓"); }
+    };
+  }
+
   function closeDrawer() { S.openId = null; const r = $("#drawerRoot"); r.hidden = true; r.innerHTML = ""; }
   $("#drawerRoot").addEventListener("click", e => { if (e.target.closest("[data-close]")) { flushEdits(); closeDrawer(); } });
   document.addEventListener("keydown", e => { if (e.key === "Escape") { if (!$("#modalRoot").hidden) closeModal(); else if (S.openId) { flushEdits(); closeDrawer(); } } });
@@ -719,11 +791,11 @@
   }
 
   function exportCsv() {
-    const cols = ["org", "category", "type", "location", "relationship", "status_summary", "last_touch_date", "last_touch_note", "ball_in_court", "next_step", "next_step_due", "owner", "ticket_size", "stage_focus", "lead_follow", "rounds", "objections", "intro_from", "notes", "contacts", "confidence"];
+    const cols = ["org", "category", "type", "location", "parent_group", "investor_fit", "campaigns", "backchannel", "relationship", "status_summary", "last_touch_date", "last_touch_note", "ball_in_court", "next_step", "next_step_due", "owner", "ticket_size", "stage_focus", "lead_follow", "rounds", "objections", "intro_from", "notes", "contacts", "confidence"];
     const visible = cols.filter(c => S.rows.some(r => c in r));
-    const cell = v => { if (Array.isArray(v)) v = v.map(x => x && typeof x === "object" ? Object.values(x).filter(Boolean).join(" | ") : x).join("; "); v = v == null ? "" : String(v); return /[",\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; };
+    const cell = (v, k) => { if (k === "backchannel" && Array.isArray(v)) v = v.map(bcLabel); if (Array.isArray(v)) v = v.map(x => x && typeof x === "object" ? Object.values(x).filter(Boolean).join(" | ") : x).join("; "); v = v == null ? "" : String(v); return /[",\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; };
     const rows = S.rows.filter(matches).sort(cmp);
-    const csv = [visible.join(",")].concat(rows.map(r => visible.map(c => cell(r[c])).join(","))).join("\n");
+    const csv = [visible.join(",")].concat(rows.map(r => visible.map(c => cell(r[c], c)).join(","))).join("\n");
     const a = document.createElement("a");
     a.href = URL.createObjectURL(new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8" }));
     a.download = `brineworks-funders-${today()}.csv`;
