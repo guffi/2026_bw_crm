@@ -172,6 +172,95 @@
   }
   const setState = (el, text, kind) => { if (!el) return; el.className = "state" + (kind ? " " + kind : ""); el.innerHTML = (kind === "busy" ? '<span class="spin"></span>' : "") + esc(text); };
 
+  /* ---------- outbox: every change shows at once, then saves in the background ----------
+     Changes go into a queue kept in this browser (so a closed tab or a dropped connection loses nothing),
+     are sent one at a time in the order they were made, and are retried with back-off on network or server
+     hiccups. A change the server refuses is dropped, the person is told, and the list is reloaded from the server. */
+  const OB = { items: [], running: false, timer: null, tries: 0, resync: false, waiters: [] };
+  try { OB.items = JSON.parse(store.get("crm-outbox") || "[]") || []; } catch (e) { OB.items = []; }
+  const saveOutbox = () => store.set("crm-outbox", JSON.stringify(OB.items));
+  const MAX_TRIES = 8;
+  function enqueue(action, body) {
+    const it = { k: Date.now() + "-" + Math.random().toString(36).slice(2, 7), action, body, at: new Date().toISOString() };
+    applyLocal(it); OB.items.push(it); saveOutbox(); stamp(); runOutbox();
+    return it;
+  }
+  /** Apply a queued change to what's on screen. Also used after a reload, so changes still in the queue stay visible. */
+  function applyLocal(it) {
+    const b = it.body || {};
+    if (it.action === "update") (b.patches || []).forEach(p => { const r = S.rows.find(x => x.id === p.id); if (r) Object.assign(r, p.fields); });
+    if (it.action === "backchannel_set") {
+      const r = S.rows.find(x => x.id === b.id); if (!r) return;
+      const list = (r.backchannel || []).slice();
+      const meId = S.user && S.user.id, meName = S.user && S.user.name;
+      const who = b.user_id ? { user_id: b.user_id, name: ((S.people || []).find(p => p.id === b.user_id) || {}).name || b.user_id } : b.name ? { user_id: null, name: b.name } : { user_id: meId, name: meName };
+      const key = e => e.user_id ? "u:" + e.user_id : "n:" + String(e.name || "").trim().toLowerCase();
+      const i = list.findIndex(e => key(e) === key(who) || (!who.user_id && e.name && e.name.toLowerCase() === String(who.name).toLowerCase()));
+      if (b.remove) { if (i >= 0) list.splice(i, 1); }
+      else if (i >= 0) list[i] = Object.assign({}, list[i], { strength: b.strength });
+      else list.push({ user_id: who.user_id, name: who.name, strength: b.strength, added_by: meName });
+      r.backchannel = list;
+    }
+    if (it.action === "todo_update" && S.todos) {
+      const item = S.todos.items.find(i => i.id === b.id); if (!item) return;
+      const f = b.fields || {};
+      Object.assign(item, f, f.status ? { done_at: f.status === "open" ? null : it.at, done_by: f.status === "open" ? null : (S.user && S.user.name) } : {});
+    }
+  }
+  const laterFor = (idx, id) => OB.items.slice(idx).some(x => (x.body || {}).id === id || ((x.body || {}).patches || []).some(p => p.id === id));
+  function applyResult(it, res) {
+    if (res && res.meta) S.meta = res.meta;
+    const b = it.body || {};
+    if (it.action === "update") (res.rows || []).forEach(nr => {
+      if (laterFor(0, nr.id) || S.pending[nr.id]) return; // newer changes still on their way: keep what's on screen
+      const i = S.rows.findIndex(x => x.id === nr.id); if (i >= 0) S.rows[i] = upgradeRow(nr);
+    });
+    if (it.action === "backchannel_set" && res.row && !laterFor(0, b.id)) {
+      const i = S.rows.findIndex(x => x.id === b.id);
+      if (i >= 0) S.rows[i] = Object.assign({}, S.rows[i], { backchannel: res.row.backchannel || [], updated_at: res.row.updated_at, updated_by: res.row.updated_by });
+    }
+    if (it.action === "todo_update" && res.item && S.todos && !laterFor(0, b.id)) {
+      const item = S.todos.items.find(i => i.id === b.id); if (item) Object.assign(item, res.item);
+    }
+    if (S.rows.length) writeCache();
+  }
+  async function runOutbox() {
+    if (OB.running || !S.token || !API) return;
+    clearTimeout(OB.timer);
+    OB.running = true;
+    try {
+      while (OB.items.length && S.token) {
+        const it = OB.items[0];
+        try {
+          const res = await api(it.action, Object.assign({}, it.body));
+          OB.items.shift(); saveOutbox(); OB.tries = 0;
+          applyResult(it, res);
+        } catch (e) {
+          if (e.code === "unauthorized") return; // signed out; the queue waits for the next sign-in
+          const transient = e.code === "network" || e.code === "server_error";
+          if (transient && ++OB.tries < MAX_TRIES) {
+            OB.timer = setTimeout(runOutbox, Math.min(30000, 1500 * Math.pow(2, OB.tries - 1)));
+            return;
+          }
+          OB.items.shift(); saveOutbox(); OB.tries = 0; OB.resync = true;
+          toast("A change couldn't be saved: " + e.message, "err");
+        }
+      }
+    } finally {
+      OB.running = false; stamp();
+      if (!OB.items.length) {
+        const w = OB.waiters.splice(0); w.forEach(f => f());
+        if (OB.resync) { OB.resync = false; try { await loadBoot(true); } catch (e) { /* next poll */ } }
+        if (S.view === "pipeline" && $("#rows") && !S.openId) renderRows();
+        if (S.view === "todos") renderTodos();
+        renderTabsSafe();
+      }
+    }
+  }
+  const outboxIdle = () => OB.items.length ? new Promise(res => OB.waiters.push(res)) : Promise.resolve();
+  function renderTabsSafe() { try { if (S.tier) renderTabs(); } catch (e) { /* not rendered yet */ } }
+  window.addEventListener("online", () => { OB.tries = 0; runOutbox(); });
+
   /* ---------- tracking ---------- */
   const T = { q: [], view: null, start: 0 };
   function track(type, extra) {
@@ -226,9 +315,9 @@
     const cache = readCache();
     const r = await api("boot", { known_version: cache ? cache.version : null, known_tier: cache ? cache.tier : null, force: !!force });
     S.user = r.user; S.tier = r.tier; S.meta = r.meta; S.prefs = r.prefs || {}; S.viewAs = r.view_as || null;
-    if (r.data) { S.rows = (r.data.rows || []).map(upgradeRow); S.summary = r.data.summary; S.empty = !!r.data.empty; writeCache(); }
-    else if (cache) { S.rows = cache.rows.map(upgradeRow); S.summary = cache.summary; S.empty = !!cache.empty; }
-    S.todos = r.todos || null; S.people = r.people || S.people || null;
+    if (r.data) { S.rows = (r.data.rows || []).map(upgradeRow); OB.items.forEach(applyLocal); S.summary = r.data.summary; S.empty = !!r.data.empty; writeCache(); }
+    else if (cache) { S.rows = cache.rows.map(upgradeRow); OB.items.forEach(applyLocal); S.summary = cache.summary; S.empty = !!cache.empty; }
+    S.todos = r.todos || null; if (S.todos) OB.items.filter(i => i.action === "todo_update").forEach(applyLocal); S.people = r.people || S.people || null;
     S.lastCheck = Date.now();
     const tp = (S.prefs.todos || {}); S.todoFilter = tp.filter || "all"; S.hideDone = !!tp.hide_done;
     if (!S.viewInit) { applyDefaultView(); S.viewInit = true; }
@@ -253,6 +342,7 @@
   function signOut(expired) {
     if (S.token && !expired) { track("logout"); endView(); flush(true); api("logout").catch(() => {}); }
     store.del("crm-token"); store.del("crm-cache");
+    if (!expired) { OB.items = []; saveOutbox(); }
     S.token = null; S.user = null; S.tier = null; S.rows = []; S.todos = null; S.summary = null; S.viewAs = null; S.viewInit = false;
     closeDrawer(); closeModal();
     showOnly("#login");
@@ -284,6 +374,7 @@
     if (link.view && first === "pipeline") applyLinkView(link.view);
     go(first);
     clearInterval(S.pollTimer); S.pollTimer = setInterval(maybeCheck, 30000);
+    OB.tries = 0; runOutbox();
     clearInterval(S.stampTimer); S.stampTimer = setInterval(stamp, 30000);
     stamp();
   }
@@ -366,6 +457,11 @@
   function stamp() {
     const m = S.meta || {};
     const el = $("#updated");
+    if (OB.items.length) {
+      el.innerHTML = OB.tries ? `<b class="overdue">Offline or busy</b> · ${OB.items.length} change${OB.items.length > 1 ? "s" : ""} waiting, retrying` : `<span class="spin"></span> Saving ${OB.items.length} change${OB.items.length > 1 ? "s" : ""}…`;
+      el.title = "Your changes are kept in this browser until the server has them."; return;
+    }
+    if (!S.tier) return;
     if (!m.version) { el.textContent = "No data yet"; return; }
     el.innerHTML = `Updated <b>${esc(fmtTime(m.updated_at))}</b>${m.updated_by ? " by " + esc(m.updated_by.split(" ")[0]) : ""} · checked ${esc(ago(Date.now() - S.lastCheck))}`;
     el.title = "Version " + m.version + ". The page checks for a newer version every " + (S.tier.poll_minutes || 10) + " minutes.";
@@ -380,7 +476,9 @@
       const prev = S.meta || {};
       S.lastCheck = Date.now();
       const dataChanged = r.meta.version !== prev.version, todosChanged = r.meta.todos_version !== prev.todos_version;
-      if ((dataChanged && !Object.keys(S.pending).length) || (todosChanged && S.tier.todos)) {
+      const busy = Object.keys(S.pending).length || OB.items.length;
+      if (busy) { S.meta = Object.assign({}, prev, { server_time: r.meta.server_time }); stamp(); return; }
+      if (dataChanged || (todosChanged && S.tier.todos)) {
         await loadBoot();
         if (!S.openId && S.view !== "admin") render();
         renderTabs();
@@ -754,7 +852,7 @@
       const b = e.target.closest("[data-v]"); if (!b) return;
       m.close(); const v = b.dataset.v || null;
       if ((r[field] || null) === v) return;
-      queueEdit(id, field, v); renderRows(); toast("Saving " + (field === "contact" ? "contact" : "status") + "…");
+      queueEdit(id, field, v); renderRows();
     };
   }
 
@@ -894,19 +992,13 @@
     box = box || $("#bcBox"); if (!box) return;
     const r = () => S.rows.find(x => x.id === id);
     const st = () => box.querySelector("[data-bcstate]");
-    const send = async (body, label) => {
+    const send = (body, label) => {
       if (S.viewAs) { toast("You are viewing as another tier.", "err"); return; }
-      setState(st(), "Saving…", "busy");
-      try {
-        const res = await api("backchannel_set", Object.assign({ id }, body));
-        const i = S.rows.findIndex(x => x.id === id);
-        if (i >= 0 && res.row) S.rows[i] = Object.assign({}, S.rows[i], { backchannel: res.row.backchannel || [], updated_at: res.row.updated_at, updated_by: res.row.updated_by });
-        S.meta = res.meta; writeCache(); stamp();
-        box.innerHTML = bcSection(r(), compact); wireBc(id, box, compact); setState(st(), label || "Saved ✓", "ok");
-        if (S.view === "pipeline" && $("#rows")) renderRows();
-        const db = $("#bcBox"); if (db && db !== box && S.openId === id) { db.innerHTML = bcSection(r()); wireBc(id, db); }
-        track("backchannel", { view: S.view, target: id, detail: JSON.stringify(body).slice(0, 80) });
-      } catch (e) { setState(st(), "Not saved: " + e.message, "err"); }
+      enqueue("backchannel_set", Object.assign({ id }, body));
+      box.innerHTML = bcSection(r(), compact); wireBc(id, box, compact); setState(st(), label || "Saved ✓", "ok");
+      if (S.view === "pipeline" && $("#rows")) renderRows();
+      const db = $("#bcBox"); if (db && db !== box && S.openId === id) { db.innerHTML = bcSection(r()); wireBc(id, db); }
+      track("backchannel", { view: S.view, target: id, detail: JSON.stringify(body).slice(0, 80) });
     };
     const target = i => { const e = (r().backchannel || [])[+i]; return !e ? {} : bcMine(e) ? {} : e.user_id ? { user_id: e.user_id } : { name: e.name }; };
     box.onclick = e => {
@@ -932,28 +1024,17 @@
   function queueEdit(id, field, value) {
     const r = S.rows.find(x => x.id === id); if (r) r[field] = value;
     S.pending[id] = S.pending[id] || {}; S.pending[id][field] = value;
-    setState($("#saveState"), "Saving…", "busy");
-    clearTimeout(S.saveTimer); S.saveTimer = setTimeout(flushEdits, 900);
+    setState($("#saveState"), "Saved ✓", "ok");
+    clearTimeout(S.saveTimer); S.saveTimer = setTimeout(flushEdits, 700);
   }
-  let saving = Promise.resolve();
+  /** Typing is gathered for a moment, then handed to the outbox as one change per batch. */
   function flushEdits() {
     clearTimeout(S.saveTimer);
-    const ids = Object.keys(S.pending); if (!ids.length) return saving;
-    const patches = ids.map(id => ({ id, fields: S.pending[id] })); S.pending = {};
-    saving = saving.then(async () => {
-      try {
-        const res = await api("update", { patches });
-        (res.rows || []).forEach(nr => { const i = S.rows.findIndex(x => x.id === nr.id); if (i >= 0) S.rows[i] = upgradeRow(nr); });
-        S.meta = res.meta; writeCache(); stamp();
-        setState($("#saveState"), "Saved ✓", "ok");
-        if (S.view === "pipeline" && $("#rows")) renderRows();
-      } catch (e) {
-        setState($("#saveState"), "Not saved: " + e.message, "err");
-        if (e.code !== "forbidden") patches.forEach(p => { S.pending[p.id] = Object.assign(p.fields, S.pending[p.id] || {}); });
-      }
-    });
-    return saving;
+    const ids = Object.keys(S.pending);
+    if (ids.length) { const patches = ids.map(id => ({ id, fields: S.pending[id] })); S.pending = {}; enqueue("update", { patches }); }
+    return outboxIdle();
   }
+
 
   function addFunder() {
     openModal(`<h2>Add funder</h2>
@@ -1078,13 +1159,9 @@
         <button class="linklike" type="button" data-dismiss="${esc(i.id)}">Dismiss</button>` : (i.status === "open" ? `<span class="conf">${esc(i.owner || "")}</span>` : "")}</div>
     </div>`;
   }
-  async function setTodo(id, fields) {
-    const item = S.todos.items.find(i => i.id === id);
-    const before = Object.assign({}, item);
-    Object.assign(item, fields, fields.status ? { done_at: fields.status === "open" ? null : new Date().toISOString(), done_by: fields.status === "open" ? null : S.user.name } : {});
+  function setTodo(id, fields) {
+    enqueue("todo_update", { id, fields });
     renderTabs(); renderTodos();
-    try { const r = await api("todo_update", { id, fields }); Object.assign(item, r.item); }
-    catch (e) { Object.assign(item, before); toast(e.message, "err"); renderTabs(); renderTodos(); }
   }
 
   /* ---------- overview ---------- */
