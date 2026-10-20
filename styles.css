@@ -286,3 +286,20 @@ th.filtered{background:var(--accent-soft)}
 th.filtered .thlabel{color:var(--accent)}
 td.cat{white-space:nowrap;font-size:13px}
 td.cat .t{display:block;font-size:11px;color:var(--muted)}
+
+/* click-to-change cells */
+.cellbtn{border:0;background:none;padding:2px 4px;margin:-2px -4px;border-radius:6px;cursor:pointer;display:inline-flex;align-items:center;gap:4px;text-align:left;font:inherit;color:inherit}
+.cellbtn:hover{background:var(--soft)}
+.cellbtn .caret{font-size:10px;color:var(--muted);opacity:0}
+.cellbtn:hover .caret,.cellbtn:focus-visible .caret{opacity:1}
+.bcnone{font-size:12px;color:var(--muted)}
+.menu.pickmenu{min-width:200px;padding:6px}
+.menu.pickmenu button{display:flex;align-items:center;gap:6px;width:100%;text-align:left}
+.menu.pickmenu button.cur{background:var(--soft)}
+.menu.bcmenu{width:min(420px,calc(100vw - 16px));padding:12px}
+.bcpop h3{margin:0 0 8px;font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted)}
+.bcpop .actions{margin-top:8px}
+.menu.bcmenu button.segb{padding:4px 9px;border-radius:0;font-size:12.5px}
+.menu.bcmenu button.segb+button.segb{border-left:1px solid var(--line)}
+.menu.bcmenu button.btn{padding:4px 9px;border:1px solid var(--line);border-radius:6px}
+.menu.bcmenu button:hover{background:var(--soft)}

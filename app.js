@@ -538,7 +538,12 @@
       const sb = e.target.closest("[data-sk]"); if (sb) { e.stopPropagation(); S.pv.sortKey = sb.dataset.sk; S.pv.sortDir = +sb.dataset.sd; viewChanged(); renderPipeline(); return; }
       const th = e.target.closest("th[data-k]"); if (!th) return; const k = th.dataset.k; if (S.pv.sortKey === k) S.pv.sortDir *= -1; else { S.pv.sortKey = k; S.pv.sortDir = k === "last_touch_date" ? -1 : 1; } viewChanged(); renderRows();
     };
-    $("#rows").onclick = e => { const tr = e.target.closest("tr[data-id]"); if (tr) openDrawer(tr.dataset.id); };
+    $("#rows").onclick = e => {
+      const tr = e.target.closest("tr[data-id]"); if (!tr) return;
+      const pop = e.target.closest("[data-pop]");
+      if (pop) { e.stopPropagation(); cellPopover(tr.dataset.id, pop.dataset.pop, pop); return; }
+      openDrawer(tr.dataset.id);
+    };
     $("#rows").onkeydown = e => { if (e.key === "Enter") { const tr = e.target.closest("tr[data-id]"); if (tr) openDrawer(tr.dataset.id); } };
     if ($("#csvBtn")) $("#csvBtn").onclick = exportCsv;
     $("#linkBtn").onclick = copyViewLink;
@@ -590,6 +595,7 @@
     const r = anchor.getBoundingClientRect();
     m.style.left = Math.max(8, Math.min(r.left + window.scrollX, window.innerWidth - 300)) + "px"; m.style.top = (r.bottom + window.scrollY + 4) + "px";
     document.body.appendChild(m);
+    requestAnimationFrame(() => { const w = m.offsetWidth; const maxLeft = window.scrollX + document.documentElement.clientWidth - w - 8; if (parseFloat(m.style.left) > maxLeft) m.style.left = Math.max(8, maxLeft) + "px"; });
     const close = () => { m.remove(); document.removeEventListener("mousedown", onDoc, true); document.removeEventListener("keydown", onKey, true); };
     const onDoc = e => { if (!m.contains(e.target)) close(); };
     const onKey = e => { if (e.key === "Escape") close(); };
@@ -722,8 +728,32 @@
 
   function bcCell(r) {
     const list = canView("backchannel") ? (r.backchannel || []) : [];
-    if (!list.length) return "";
+    if (!list.length) return `<span class="bcnone">None</span>`;
     return `<span class="bcline">${list.map(e => `<span class="bc${bcMine(e) ? " me" : ""}${e.strength ? " s-" + esc(e.strength) : ""}">${esc(e.name.split(" ")[0])}${e.strength ? `<i>${esc(e.strength[0].toUpperCase())}</i>` : ""}</span>`).join("")}</span>`;
+  }
+
+  /** A pill that opens a small chooser when the person may edit the field, or a plain pill when they can't. */
+  function pillBtn(field, value, cls) {
+    const editable = canEdit("core") && !S.viewAs;
+    const inner = value ? `<span class="pill ${cls}">${esc(value)}</span>` : `<span class="conf">${editable ? "Set…" : "—"}</span>`;
+    return editable ? `<button type="button" class="cellbtn" data-pop="${field}" title="Click to change">${inner}<span class="caret">▾</span></button>` : inner;
+  }
+  function cellPopover(id, field, anchor) {
+    const r = S.rows.find(x => x.id === id); if (!r) return;
+    if (field === "backchannel") {
+      const m = popover(anchor, "bcmenu");
+      m.innerHTML = bcSection(r, true); wireBc(id, m, true);
+      return;
+    }
+    const opts = field === "contact" ? CONTACTS : [""].concat(STATUSES);
+    const m = popover(anchor, "pickmenu");
+    m.innerHTML = `<div class="fhead"><b>${field === "contact" ? "Contact" : "Status"}</b><span class="conf">${esc(r.org)}</span></div>` + opts.map(o => `<button type="button" data-v="${esc(o)}" class="${(r[field] || "") === o ? "cur" : ""}">${o ? `<span class="pill ${field === "contact" ? contactClass(o) : statusClass(o)}">${esc(o)}</span>` : `<span class="conf">No status</span>`}${(r[field] || "") === o ? " ✓" : ""}</button>`).join("");
+    m.onclick = e => {
+      const b = e.target.closest("[data-v]"); if (!b) return;
+      m.close(); const v = b.dataset.v || null;
+      if ((r[field] || null) === v) return;
+      queueEdit(id, field, v); renderRows(); toast("Saving " + (field === "contact" ? "contact" : "status") + "…");
+    };
   }
 
   function renderRows() {
@@ -738,9 +768,9 @@
       return `<tr class="click" tabindex="0" data-id="${esc(r.id)}">
         <td class="org">${esc(r.org)}${r.location ? `<span class="t">${esc(r.location)}</span>` : ""}</td>
         <td class="cat">${esc(String(r.category || "—").replace("Investor – ", ""))}${String(r.category || "").indexOf("Investor") === 0 ? `<span class="t">Investor</span>` : ""}</td>
-        <td><span class="pill ${contactClass(r.contact)}">${esc(r.contact || "—")}</span></td>
-        <td>${r.status ? `<span class="pill ${statusClass(r.status)}">${esc(r.status)}</span>` : `<span class="conf">—</span>`}</td>
-        ${showBc ? `<td class="bccol">${bcCell(r)}</td>` : ""}
+        <td>${pillBtn("contact", r.contact, contactClass(r.contact))}</td>
+        <td>${pillBtn("status", r.status, statusClass(r.status))}</td>
+        ${showBc ? `<td class="bccol"><button type="button" class="cellbtn" data-pop="backchannel" title="Who can intro? Click to change">${bcCell(r)}</button></td>` : ""}
         <td class="date">${esc(r.last_touch_date || "—")}<div class="conf">${esc(r.last_touch_channel || "")}</div></td>
         ${showActions ? `<td class="sum"><div class="clamp">${esc(r.next_step || "")}</div>${r.next_step_due ? `<div class="mono ${od ? "overdue" : "conf"}">due ${esc(r.next_step_due)}</div>` : ""}</td>
         <td class="ball ${b === "Them" ? "them" : b ? "us" : ""}${mine ? " mine" : ""}">${esc(b || "")}${fu ? `<div class="${fu.due ? "fu due" : "fu"}">${fu.due ? "Follow up? · " : ""}${esc(fu.text)}</div>` : ""}</td>` : ""}
@@ -823,7 +853,7 @@
         </div>
       </aside>`;
     root.hidden = false;
-    wireBc(id);
+    wireBc(id, $("#bcBox"));
     $$("[data-f]", root).forEach(el => el.addEventListener("change", () => queueEdit(id, el.dataset.f, parseField(el.dataset.kind, el.value))));
     if ($("#touchBtn")) $("#touchBtn").onclick = () => {
       const d = today(); const inp = root.querySelector('[data-f="last_touch_date"]'); if (inp) inp.value = d;
@@ -837,48 +867,60 @@
     const closeBtn = root.querySelector(".drawer [data-close]"); if (closeBtn) closeBtn.focus();
   }
   /* ---------- backchannel ---------- */
-  function bcSection(r) {
+  /** Who can intro to this funder. Anyone with backchannel access can add themselves or someone else, always with a strength. */
+  function bcSection(r, compact) {
     if (!canView("backchannel")) return "";
-    const list = r.backchannel || [], edit = canEdit("backchannel"), admin = edit && S.tier.admin_page;
+    const list = r.backchannel || [], edit = canEdit("backchannel") && !S.viewAs, admin = edit && S.tier.admin_page;
     const mine = list.find(bcMine);
+    const canChange = e => edit && (bcMine(e) || admin || e.added_by === (S.user && S.user.name));
     const seg = (cur, attrs) => BC_STRENGTHS.map(s => `<button type="button" class="segb${cur === s ? " on" : ""}" data-bcs="${s}" ${attrs}>${s[0].toUpperCase() + s.slice(1)}</button>`).join("");
     const rows = list.map((e, i) => {
       const self = bcMine(e);
-      const ctl = admin || self ? `<span class="seg">${seg(e.strength, `data-bci="${i}"`)}</span><button type="button" class="btn small" data-bcrm="${i}" title="${self ? "I can’t intro here" : "Remove"}">${self ? "Not me" : "Remove"}</button>` : `<span class="conf">${esc(e.strength || "strength not set")}</span>`;
-      return `<li class="bcrow"><span class="bcname">${esc(e.name)}${self ? ' <span class="conf">(you)</span>' : ""}${e.note ? `<span class="conf"> · ${esc(e.note)}</span>` : ""}</span><span class="bcctl">${ctl}</span></li>`;
+      const ctl = canChange(e) ? `<span class="seg">${seg(e.strength, `data-bci="${i}"`)}</span><button type="button" class="btn small" data-bcrm="${i}" title="${self ? "I can’t intro here" : "Remove"}">${self ? "Not me" : "Remove"}</button>` : `<span class="conf">${esc(e.strength || "strength not set")}</span>`;
+      return `<li class="bcrow"><span class="bcname">${esc(e.name)}${self ? ' <span class="conf">(you)</span>' : ""}${!e.strength ? ' <span class="fu due">set strength</span>' : ""}</span><span class="bcctl">${ctl}</span></li>`;
     }).join("");
     const me = edit && !mine ? `<div class="actions"><span class="sub">I can intro here:</span><span class="seg">${seg(null, 'data-bcme="1"')}</span></div>` : "";
-    const add = admin ? `<div class="actions"><input type="text" id="bcName" placeholder="Add someone (name)" aria-label="Backchannel name" style="flex:1;min-width:140px"><select id="bcStr" aria-label="Strength"><option value="">Strength…</option>${BC_STRENGTHS.map(s => `<option>${s}</option>`).join("")}</select><button class="btn small" type="button" id="bcAdd">Add</button></div>` : "";
-    return `<div class="secbox bcbox"><h3>Backchannel — who can intro</h3>
-      ${list.length ? `<ul class="bclist">${rows}</ul>` : `<div class="sub">Nobody yet.</div>`}
+    const add = edit ? `<div class="actions bcadd"><input type="text" class="bcName" placeholder="Add someone else (name)" aria-label="Backchannel name" style="flex:1;min-width:140px"><select class="bcStr" aria-label="Strength"><option value="">Strength…</option>${BC_STRENGTHS.map(s => `<option value="${s}">${s[0].toUpperCase() + s.slice(1)}</option>`).join("")}</select><button class="btn small" type="button" data-bcadd="1">Add</button></div>` : "";
+    return `<div class="${compact ? "bcpop" : "secbox bcbox"}"><h3>Backchannel — who can intro</h3>
+      ${list.length ? `<ul class="bclist">${rows}</ul>` : `<div class="sub">None yet.</div>`}
       ${me}${add}
-      ${edit && !admin ? `<div class="conf">Mark how well you know them. Several people can be listed per fund.</div>` : ""}<span class="state" id="bcState"></span></div>`;
+      ${edit ? `<div class="conf">Several people can be listed per fund. Pick strong, medium or weak for each.</div>` : ""}<span class="state" data-bcstate="1"></span></div>`;
   }
-  function wireBc(id) {
-    const box = $("#bcBox"); if (!box) return;
+  /** Wire a backchannel box (drawer section or table popover) to the backend. */
+  function wireBc(id, box, compact) {
+    box = box || $("#bcBox"); if (!box) return;
     const r = () => S.rows.find(x => x.id === id);
+    const st = () => box.querySelector("[data-bcstate]");
     const send = async (body, label) => {
       if (S.viewAs) { toast("You are viewing as another tier.", "err"); return; }
-      setState($("#bcState"), "Saving…", "busy");
+      setState(st(), "Saving…", "busy");
       try {
         const res = await api("backchannel_set", Object.assign({ id }, body));
         const i = S.rows.findIndex(x => x.id === id);
         if (i >= 0 && res.row) S.rows[i] = Object.assign({}, S.rows[i], { backchannel: res.row.backchannel || [], updated_at: res.row.updated_at, updated_by: res.row.updated_by });
         S.meta = res.meta; writeCache(); stamp();
-        box.innerHTML = bcSection(r()); wireBc(id); setState($("#bcState"), label || "Saved ✓", "ok");
+        box.innerHTML = bcSection(r(), compact); wireBc(id, box, compact); setState(st(), label || "Saved ✓", "ok");
         if (S.view === "pipeline" && $("#rows")) renderRows();
+        const db = $("#bcBox"); if (db && db !== box && S.openId === id) { db.innerHTML = bcSection(r()); wireBc(id, db); }
         track("backchannel", { view: S.view, target: id, detail: JSON.stringify(body).slice(0, 80) });
-      } catch (e) { setState($("#bcState"), "Not saved: " + e.message, "err"); }
+      } catch (e) { setState(st(), "Not saved: " + e.message, "err"); }
     };
     const target = i => { const e = (r().backchannel || [])[+i]; return !e ? {} : bcMine(e) ? {} : e.user_id ? { user_id: e.user_id } : { name: e.name }; };
     box.onclick = e => {
+      e.stopPropagation();
       const b = e.target.closest("button"); if (!b) return;
       if (b.dataset.bcme) return send({ strength: b.dataset.bcs });
-      if (b.dataset.bci !== undefined) { const ent = (r().backchannel || [])[+b.dataset.bci]; return send(Object.assign(target(b.dataset.bci), { strength: ent && ent.strength === b.dataset.bcs ? null : b.dataset.bcs })); }
+      if (b.dataset.bci !== undefined) { const ent = (r().backchannel || [])[+b.dataset.bci]; if (ent && ent.strength === b.dataset.bcs) return; return send(Object.assign(target(b.dataset.bci), { strength: b.dataset.bcs })); }
       if (b.dataset.bcrm !== undefined) return send(Object.assign(target(b.dataset.bcrm), { remove: true }), "Removed ✓");
-      if (b.id === "bcAdd") { const nm = $("#bcName").value.trim(); if (!nm) { toast("Type a name first.", "err"); return; } return send({ name: nm, strength: $("#bcStr").value || null }, "Added ✓"); }
+      if (b.dataset.bcadd) {
+        const nm = box.querySelector(".bcName").value.trim(), str = box.querySelector(".bcStr").value;
+        if (!nm) { setState(st(), "Type a name first.", "err"); return; }
+        if (!str) { setState(st(), "Pick strong, medium or weak.", "err"); return; }
+        return send({ name: nm, strength: str }, "Added ✓");
+      }
     };
   }
+
 
   function closeDrawer() { S.openId = null; const r = $("#drawerRoot"); r.hidden = true; r.innerHTML = ""; }
   $("#drawerRoot").addEventListener("click", e => { if (e.target.closest("[data-close]")) { flushEdits(); closeDrawer(); } });
