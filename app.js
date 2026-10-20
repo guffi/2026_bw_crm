@@ -13,8 +13,28 @@
     del(k) { try { localStorage.removeItem(k); } catch (e) { /* ignore */ } },
   };
 
-  const REL = ["Active – Series A/CLA", "Existing investor", "Warm", "Grant awarded", "Grant applied", "Grant in prep", "Grant rejected", "Passed", "Dormant", "Not contacted", "Not a funder"];
-  const CATS = ["Investor", "Grant/Public", "Debt/Bank", "Other"];
+  const CONTACTS = ["Existing investor", "In contact", "No contact"];
+  const STATUSES = ["Active", "Warm", "Dormant", "Passed", "Grant in prep", "Grant applied", "Grant awarded", "Grant rejected", "Not a funder"];
+  const CATS = ["Investor – VC", "Investor – CVC", "Investor – Angel", "Investor – Family office", "Investor – Accelerator", "Investor – Other", "Grant/Public", "Debt/Bank", "Other"];
+  // Before the contact/status split every row had one "relationship"; old saved views and rows are read through these.
+  const LEGACY_STATUS = { "Active – Series A/CLA": "Active", "Warm": "Warm", "Dormant": "Dormant", "Passed": "Passed", "Grant awarded": "Grant awarded", "Grant applied": "Grant applied", "Grant in prep": "Grant in prep", "Grant rejected": "Grant rejected", "Not a funder": "Not a funder" };
+  const legacyContact = rel => rel === "Existing investor" || rel === "Grant awarded" ? "Existing investor" : rel && rel !== "Not contacted" ? "In contact" : "No contact";
+  const legacyCategory = (cat, type) => {
+    const t = String(type || "").toLowerCase();
+    if (cat !== "Investor") return cat;
+    if (/^cvc|^corporate/.test(t)) return "Investor – CVC";
+    if (/^angel/.test(t)) return "Investor – Angel";
+    if (/family office/.test(t)) return "Investor – Family office";
+    if (/accelerator/.test(t)) return "Investor – Accelerator";
+    return "Investor – VC";
+  };
+  /** Fill contact / status / category on rows saved before the split (or served by a backend that strips the new fields). */
+  function upgradeRow(r) {
+    if (!r) return r;
+    if (r.contact === undefined && r.relationship !== undefined) { r.contact = legacyContact(r.relationship); r.status = LEGACY_STATUS[r.relationship] || null; }
+    if (r.category && CATS.indexOf(r.category) < 0) { if (r.type && r.category_note === undefined) r.category_note = r.type; r.category = legacyCategory(r.category, r.type); }
+    return r;
+  }
   const CHANNELS = ["", "Email", "Meeting", "Call", "Notes", "Logged", "Sheet"];
   const BALL = ["None", "Us", "Them"];
   const CONF = ["", "High", "Medium", "Low"];
@@ -24,14 +44,15 @@
   const bcMine = e => S.user && (e.user_id ? e.user_id === S.user.id : String(e.name || "").toLowerCase() === String(S.user.name || "").toLowerCase());
   const OWNERS = ["", "GS", "JTP", "Olga", "Sam", "Ariana"];
   const OWNER_ALIASES = { gudfinnur: ["GS", "Gudfinnur"], joe: ["JTP", "Joe", "Joseph"], olga: ["Olga", "OM"] };
-  const relClass = r => r === "Active – Series A/CLA" ? "p-active" : r === "Existing investor" ? "p-existing" : r === "Warm" ? "p-warm" : String(r || "").startsWith("Grant") ? "p-grant" : r === "Passed" ? "p-passed" : "p-idle";
-  const relRank = r => { const i = REL.indexOf(r); return i < 0 ? 99 : i; };
+  const statusClass = s => s === "Active" ? "p-active" : s === "Warm" ? "p-warm" : String(s || "").startsWith("Grant") ? "p-grant" : s === "Passed" ? "p-passed" : "p-idle";
+  const contactClass = c => c === "Existing investor" ? "p-existing" : c === "In contact" ? "p-warm" : "p-idle";
+  const rank = (list, v) => { const i = list.indexOf(v); return i < 0 ? 99 : i; };
   const fmtTime = iso => { if (!iso) return "—"; const d = new Date(iso); if (isNaN(d)) return String(iso); return d.toLocaleString(undefined, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }); };
   const ago = ms => { const m = Math.round(ms / 60000); if (m < 1) return "just now"; if (m < 60) return m + " min ago"; const h = Math.round(m / 60); return h < 24 ? h + " h ago" : Math.round(h / 24) + " d ago"; };
-  const DEFAULT_VIEW = { q: "", cols: {}, usOnly: false, hideNF: true, strip: "", sortKey: "relationship", sortDir: 1 };
+  const DEFAULT_VIEW = { q: "", cols: {}, usOnly: false, hideNF: true, strip: "", sortKey: "contact", sortDir: 1 };
   // Column filters (Google-Sheets style): [field, label, field group, kind]
   const FILTER_FIELDS = [
-    ["relationship", "Relationship", "core"], ["category", "Category", "core"], ["type", "Type", "core"], ["location", "Location", "core"],
+    ["contact", "Contact", "core"], ["status", "Status", "core"], ["category", "Category", "core"], ["location", "Location", "core"],
     ["stage_focus", "Stage focus", "core"], ["lead_follow", "Lead / follow", "core"], ["tier", "Origin", "core"],
     ["investor_fit", "Investor fit", "core"], ["campaigns", "Campaign", "core", "multi"], ["backchannel", "Backchannel", "backchannel", "multi"],
     ["last_touch_date", "Last touch", "status", "touch"], ["last_touch_channel", "Channel", "status"],
@@ -61,12 +82,20 @@
     if (field === "backchannel") { const v = (r.backchannel || []).map(e => e && e.name).filter(Boolean); return v.length ? v : [BLANK]; }
     return [colValue(field, r)];
   }
-  function bucketOrder(field) { return field === "last_touch_date" ? TOUCH_BUCKETS : field === "next_step_due" ? DUE_BUCKETS : field === "relationship" ? REL.concat([BLANK]) : field === "investor_fit" ? FIT.slice(1).concat([BLANK]) : null; }
+  function bucketOrder(field) { return field === "last_touch_date" ? TOUCH_BUCKETS : field === "next_step_due" ? DUE_BUCKETS : field === "contact" ? CONTACTS.concat([BLANK]) : field === "status" ? STATUSES.concat([BLANK]) : field === "category" ? CATS.concat([BLANK]) : field === "investor_fit" ? FIT.slice(1).concat([BLANK]) : null; }
   // Old saved views had rel/cat selects; fold them into cols.
   function normaliseView(st) {
     const s = Object.assign({}, st || {}); const cols = Object.assign({}, s.cols || {});
     if (s.rel) cols.relationship = [s.rel]; if (s.cat) cols.category = [s.cat];
     delete s.rel; delete s.cat;
+    if (cols.relationship) {
+      const old = cols.relationship; delete cols.relationship;
+      const st = old.map(v => LEGACY_STATUS[v]).filter(Boolean), ct = old.filter(v => v === "Existing investor" || v === "Not contacted").map(legacyContact);
+      if (st.length && !ct.length) cols.status = st; else if (ct.length && !st.length) cols.contact = ct; else if (st.length) cols.status = st;
+    }
+    if (cols.category) { const c = []; cols.category.forEach(v => { if (v === "Investor") CATS.filter(x => x.indexOf("Investor") === 0).forEach(x => c.push(x)); else c.push(v); }); cols.category = c; }
+    delete cols.type;
+    if (s.sortKey === "relationship") s.sortKey = "contact";
     Object.keys(cols).forEach(k => { if (!Array.isArray(cols[k]) || !cols[k].length) delete cols[k]; });
     s.cols = cols; return s;
   }
@@ -173,8 +202,8 @@
     const cache = readCache();
     const r = await api("boot", { known_version: cache ? cache.version : null, known_tier: cache ? cache.tier : null, force: !!force });
     S.user = r.user; S.tier = r.tier; S.meta = r.meta; S.prefs = r.prefs || {}; S.viewAs = r.view_as || null;
-    if (r.data) { S.rows = r.data.rows || []; S.summary = r.data.summary; S.empty = !!r.data.empty; writeCache(); }
-    else if (cache) { S.rows = cache.rows; S.summary = cache.summary; S.empty = !!cache.empty; }
+    if (r.data) { S.rows = (r.data.rows || []).map(upgradeRow); S.summary = r.data.summary; S.empty = !!r.data.empty; writeCache(); }
+    else if (cache) { S.rows = cache.rows.map(upgradeRow); S.summary = cache.summary; S.empty = !!cache.empty; }
     S.todos = r.todos || null;
     S.lastCheck = Date.now();
     const tp = (S.prefs.todos || {}); S.todoFilter = tp.filter || "all"; S.hideDone = !!tp.hide_done;
@@ -401,21 +430,22 @@
 
   function matches(r, skipCol) {
     const v = S.pv, q = (v.q || "").toLowerCase();
-    if (v.hideNF && r.relationship === "Not a funder") return false;
+    if (v.hideNF && r.status === "Not a funder") return false;
     const cols = v.cols || {};
     for (const k in cols) { if (k === skipCol || !cols[k] || !cols[k].length) continue; if (!colValues(k, r).some(x => cols[k].indexOf(x) >= 0)) return false; }
     if (v.usOnly && r.ball_in_court !== "Us") return false;
     const st = v.strip;
-    if (st === "active" && r.relationship !== "Active – Series A/CLA") return false;
-    if (st === "existing" && r.relationship !== "Existing investor") return false;
-    if (st === "warm" && r.relationship !== "Warm") return false;
-    if (st === "grants" && !String(r.relationship || "").startsWith("Grant")) return false;
+    if (st === "active" && r.status !== "Active") return false;
+    if (st === "existing" && r.contact !== "Existing investor") return false;
+    if (st === "incontact" && r.contact !== "In contact") return false;
+    if (st === "warm" && r.status !== "Warm") return false;
+    if (st === "grants" && !String(r.status || "").startsWith("Grant")) return false;
     if (st === "us" && r.ball_in_court !== "Us") return false;
     if (st === "overdue" && !(r.next_step_due && r.next_step_due < today())) return false;
     if (st === "mybc" && !(r.backchannel || []).some(bcMine)) return false;
     if (st === "nobc" && (r.backchannel || []).length) return false;
     if (q) {
-      const hay = [r.org, (r.aliases || []).join(" "), r.type, r.location, r.parent_group, r.status_summary, r.next_step, r.notes, r.intro_from, (r.campaigns || []).join(" "), (r.backchannel || []).map(e => e.name).join(" "), (r.contacts || []).map(c => (c.name || "") + " " + (c.email || "")).join(" ")].join(" ").toLowerCase();
+      const hay = [r.org, (r.aliases || []).join(" "), r.category, r.category_note, r.location, r.parent_group, r.status_summary, r.next_step, r.notes, r.intro_from, (r.campaigns || []).join(" "), (r.backchannel || []).map(e => e.name).join(" "), (r.contacts || []).map(c => (c.name || "") + " " + (c.email || "")).join(" ")].join(" ").toLowerCase();
       if (hay.indexOf(q) < 0) return false;
     }
     return true;
@@ -423,7 +453,12 @@
   function cmp(a, b) {
     const k = S.pv.sortKey, dir = S.pv.sortDir;
     let x, y;
-    if (k === "relationship") { x = relRank(a.relationship); y = relRank(b.relationship); if (x === y) { x = b.last_touch_date || ""; y = a.last_touch_date || ""; } }
+    if (k === "contact" || k === "status") {
+      const ka = k === "contact" ? [rank(CONTACTS, a.contact), rank(STATUSES, a.status)] : [rank(STATUSES, a.status), rank(CONTACTS, a.contact)];
+      const kb = k === "contact" ? [rank(CONTACTS, b.contact), rank(STATUSES, b.status)] : [rank(STATUSES, b.status), rank(CONTACTS, b.contact)];
+      x = ka[0] * 100 + ka[1]; y = kb[0] * 100 + kb[1];
+      if (x === y) { x = b.last_touch_date || ""; y = a.last_touch_date || ""; }
+    }
     else { x = String(a[k] || ""); y = String(b[k] || ""); if (!x && y) return 1; if (x && !y) return -1; }
     return (x < y ? -1 : x > y ? 1 : 0) * dir;
   }
@@ -437,11 +472,11 @@
       return;
     }
     const c = k => S.rows.filter(k).length;
-    const stats = [["active", "Active round", c(r => r.relationship === "Active – Series A/CLA")], ["existing", "Existing investors", c(r => r.relationship === "Existing investor")], ["warm", "Warm", c(r => r.relationship === "Warm")], ["grants", "Grants", c(r => String(r.relationship || "").startsWith("Grant"))]];
+    const stats = [["existing", "Existing investors", c(r => r.contact === "Existing investor")], ["incontact", "In contact", c(r => r.contact === "In contact" && r.status !== "Not a funder")], ["active", "Active round", c(r => r.status === "Active")], ["warm", "Warm", c(r => r.status === "Warm")], ["grants", "Grants", c(r => String(r.status || "").startsWith("Grant"))]];
     if (showActions) stats.push(["us", "We owe a reply", c(r => r.ball_in_court === "Us")], ["overdue", "Next step overdue", c(r => r.next_step_due && r.next_step_due < today())]);
     if (canView("backchannel")) {
       stats.push(["mybc", "I can intro", c(r => (r.backchannel || []).some(bcMine))]);
-      if (S.tier.admin_page) stats.push(["nobc", "No backchannel yet", c(r => !(r.backchannel || []).length && r.relationship !== "Not a funder")]);
+      if (S.tier.admin_page) stats.push(["nobc", "No backchannel yet", c(r => !(r.backchannel || []).length && r.status !== "Not a funder")]);
     }
     const canSaveViews = !S.viewAs;
     main.innerHTML = `
@@ -457,7 +492,7 @@
       </div>
       <div class="chips colfilters" id="colFilters"></div>
       <div class="tablebox"><table class="wide"><thead><tr>
-        ${th("org", "Organisation", false)}${th("relationship", "Relationship")}<th>Status</th>${th("last_touch_date", "Last touch")}
+        ${th("org", "Organisation", false)}${th("contact", "Contact · status")}<th>Status notes</th>${th("last_touch_date", "Last touch")}
         ${showActions ? `${th("next_step_due", "Next step")}${th("owner", "Owner")}${th("ball_in_court", "Ball")}` : ""}
       </tr></thead><tbody id="rows"></tbody></table></div>`;
     renderViewChips(); renderColFilters(); renderRows();
@@ -530,7 +565,7 @@
     let vals = Object.keys(allVals);
     vals.sort((a, b) => order ? order.indexOf(a) - order.indexOf(b) : a === BLANK ? 1 : b === BLANK ? -1 : a.localeCompare(b));
     let sel = (S.pv.cols[k] || []).slice();
-    const sortable = ["org", "relationship", "last_touch_date", "next_step_due", "owner", "ball_in_court"].indexOf(k) >= 0;
+    const sortable = ["org", "contact", "status", "last_touch_date", "next_step_due", "owner", "ball_in_court"].indexOf(k) >= 0;
     m.innerHTML = `<div class="fhead"><b>${esc(f[1])}</b><span class="conf" id="fsel"></span></div>
       ${sortable ? `<div class="frow"><button type="button" data-sort="1">Sort A → Z</button><button type="button" data-sort="-1">Sort Z → A</button></div>` : ""}
       <input type="search" id="fq" placeholder="Search values" aria-label="Search values">
@@ -651,8 +686,8 @@
     $("#rows").innerHTML = list.length ? list.map(r => {
       const od = r.next_step_due && r.next_step_due < today();
       return `<tr class="click" tabindex="0" data-id="${esc(r.id)}">
-        <td class="org">${esc(r.org)}<span class="t">${esc([r.type, r.location].filter(Boolean).join(" · "))}</span>${bcCell(r)}</td>
-        <td><span class="pill ${relClass(r.relationship)}">${esc(r.relationship || "—")}</span>${r.confidence ? `<div class="conf">${esc(r.confidence)}${r.tier === "Imported" ? " · imported" : ""}</div>` : ""}</td>
+        <td class="org">${esc(r.org)}<span class="t">${esc([r.category, r.location].filter(Boolean).join(" · "))}</span>${bcCell(r)}</td>
+        <td><span class="pill ${contactClass(r.contact)}">${esc(r.contact || "—")}</span>${r.status ? `<div style="margin-top:4px"><span class="pill ${statusClass(r.status)}">${esc(r.status)}</span></div>` : ""}${r.confidence ? `<div class="conf">${esc(r.confidence)}${r.tier === "Imported" ? " · imported" : ""}</div>` : ""}</td>
         <td class="sum"><div class="clamp">${esc(r.status_summary || "")}</div></td>
         <td class="date">${esc(r.last_touch_date || "—")}<div class="conf">${esc(r.last_touch_channel || "")}</div></td>
         ${showActions ? `<td class="sum"><div class="clamp">${esc(r.next_step || "")}</div>${r.next_step_due ? `<div class="mono ${od ? "overdue" : "conf"}">due ${esc(r.next_step_due)}</div>` : ""}</td>
@@ -663,12 +698,12 @@
 
   /* ---------- drawer ---------- */
   const FIELDS = {
-    core: [["org", "Name", "text", "wide"], ["relationship", "Relationship", REL], ["category", "Category", CATS], ["type", "Type", "text"], ["location", "Location", "text"], ["ticket_size", "Ticket size", "text"], ["stage_focus", "Stage focus", "text"], ["lead_follow", "Lead / follow", "text"], ["rounds", "Rounds (comma separated)", "list", "wide"], ["aliases", "Other names (comma separated)", "list", "wide"],
+    core: [["org", "Name", "text", "wide"], ["contact", "Contact", CONTACTS], ["status", "Status", [""].concat(STATUSES)], ["category", "Category", CATS], ["location", "Location", "text"], ["ticket_size", "Ticket size", "text"], ["stage_focus", "Stage focus", "text"], ["lead_follow", "Lead / follow", "text"], ["rounds", "Rounds (comma separated)", "list", "wide"], ["aliases", "Other names (comma separated)", "list", "wide"],
       ["parent_group", "Parent group", "text"], ["investor_fit", "Investor fit", FIT], ["fit_note", "Why it fits", "area", "wide"], ["strategic_angle", "Strategic angle (pilot, offtake, partner)", "area", "wide"], ["campaigns", "Campaigns / lists (comma separated)", "list", "wide"]],
-    status: [["status_summary", "Status", "area", "wide"], ["last_touch_date", "Last touch", "date"], ["last_touch_channel", "Channel", CHANNELS], ["last_touch_note", "Last touch note", "text", "wide"]],
+    status: [["status_summary", "Status notes", "area", "wide"], ["last_touch_date", "Last touch", "date"], ["last_touch_channel", "Channel", CHANNELS], ["last_touch_note", "Last touch note", "text", "wide"]],
     actions: [["next_step", "Next step", "text", "wide"], ["next_step_due", "Due", "date"], ["owner", "Owner", OWNERS], ["ball_in_court", "Ball in court", BALL]],
     contacts: [["contacts", "People — one per line: Name | role | email | LinkedIn", "contacts", "wide"]],
-    internal: [["notes", "Notes", "area", "wide"], ["objections", "Objections", "area", "wide"], ["intro_from", "Intro from", "text"], ["first_contact_date", "First contact", "date"], ["confidence", "Confidence", CONF]],
+    internal: [["notes", "Notes", "area", "wide"], ["objections", "Objections", "area", "wide"], ["intro_from", "Intro from", "text"], ["first_contact_date", "First contact", "date"], ["confidence", "Confidence", CONF], ["category_note", "Note on category", "text", "wide"]],
     sources: [["sources", "Sources — one per line: type | label | link or ref | date", "sources", "wide"]],
   };
   const GROUP_TITLES = { core: "Organisation", status: "Status", actions: "Next step", contacts: "People", internal: "Internal", sources: "Sources" };
@@ -722,7 +757,7 @@
     const root = $("#drawerRoot");
     root.innerHTML = `<div class="scrim" data-close></div>
       <aside class="drawer" role="dialog" aria-label="${esc(r.org)}">
-        <div class="dhead"><div><h2>${esc(r.org)}</h2><div class="sub">${esc([r.category, r.type, r.location].filter(Boolean).join(" · "))}</div>
+        <div class="dhead"><div><h2>${esc(r.org)}</h2><div class="sub">${esc([r.category, r.contact, r.status, r.location].filter(Boolean).join(" · "))}</div>
           ${r.updated_by ? `<div class="conf">Last changed ${esc(fmtTime(r.updated_at))} by ${esc(r.updated_by)}</div>` : ""}</div>
           <button class="btn" type="button" data-close>Close</button></div>
         <div class="dbody">
@@ -810,7 +845,7 @@
     saving = saving.then(async () => {
       try {
         const res = await api("update", { patches });
-        (res.rows || []).forEach(nr => { const i = S.rows.findIndex(x => x.id === nr.id); if (i >= 0) S.rows[i] = nr; });
+        (res.rows || []).forEach(nr => { const i = S.rows.findIndex(x => x.id === nr.id); if (i >= 0) S.rows[i] = upgradeRow(nr); });
         S.meta = res.meta; writeCache(); stamp();
         setState($("#saveState"), "Saved ✓", "ok");
         if (S.view === "pipeline" && $("#rows")) renderRows();
@@ -830,12 +865,12 @@
     $("#newSave").onclick = () => withButton($("#newSave"), async () => {
       const org = $("#newOrg").value.trim(); if (!org) throw new Error("Give it a name.");
       const r = await api("add", { row: { org, category: $("#newCat").value } });
-      S.rows.push(r.row); S.meta = r.meta; writeCache(); stamp(); closeModal(); render(); openDrawer(r.row.id); toast("Added.");
+      S.rows.push(upgradeRow(r.row)); S.meta = r.meta; writeCache(); stamp(); closeModal(); render(); openDrawer(r.row.id); toast("Added.");
     }, { busy: "Adding…", done: "Added ✓" }).catch(() => {});
   }
 
   function exportCsv() {
-    const cols = ["org", "category", "type", "location", "parent_group", "investor_fit", "campaigns", "backchannel", "relationship", "status_summary", "last_touch_date", "last_touch_note", "ball_in_court", "next_step", "next_step_due", "owner", "ticket_size", "stage_focus", "lead_follow", "rounds", "objections", "intro_from", "notes", "contacts", "confidence"];
+    const cols = ["org", "category", "category_note", "contact", "status", "location", "parent_group", "investor_fit", "campaigns", "backchannel", "status_summary", "last_touch_date", "last_touch_note", "ball_in_court", "next_step", "next_step_due", "owner", "ticket_size", "stage_focus", "lead_follow", "rounds", "objections", "intro_from", "notes", "contacts", "confidence"];
     const visible = cols.filter(c => S.rows.some(r => c in r));
     const cell = (v, k) => { if (k === "backchannel" && Array.isArray(v)) v = v.map(bcLabel); if (Array.isArray(v)) v = v.map(x => x && typeof x === "object" ? Object.values(x).filter(Boolean).join(" | ") : x).join("; "); v = v == null ? "" : String(v); return /[",\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; };
     const rows = S.rows.filter(matches).sort(cmp);
@@ -959,15 +994,16 @@
     const main = $("#main");
     let counts = {}, existing = [], grants = [], activeCount, warmCount;
     if (S.summary) {
-      counts = S.summary.counts; existing = S.summary.existing_investors; grants = S.summary.grants; activeCount = S.summary.active_count; warmCount = S.summary.warm_count;
+      counts = Object.assign({}, S.summary.counts); existing = S.summary.existing_investors || []; grants = (S.summary.grants || []).map(g => ({ org: g.org, status: g.status || LEGACY_STATUS[g.relationship] || g.relationship })); activeCount = S.summary.active_count; warmCount = S.summary.warm_count;
+      Object.keys(LEGACY_STATUS).forEach(k => { if (counts[k] && k !== LEGACY_STATUS[k]) { counts[LEGACY_STATUS[k]] = (counts[LEGACY_STATUS[k]] || 0) + counts[k]; delete counts[k]; } });
     } else {
-      S.rows.forEach(r => { counts[r.relationship || "Unknown"] = (counts[r.relationship || "Unknown"] || 0) + 1; });
-      existing = S.rows.filter(r => r.relationship === "Existing investor").map(r => ({ org: r.org, type: r.type, location: r.location }));
-      grants = S.rows.filter(r => /^Grant (awarded|applied)/.test(r.relationship || "")).map(r => ({ org: r.org, relationship: r.relationship }));
-      activeCount = counts["Active – Series A/CLA"] || 0; warmCount = counts["Warm"] || 0;
+      S.rows.forEach(r => { const k = r.status || r.contact || "Unknown"; counts[k] = (counts[k] || 0) + 1; });
+      existing = S.rows.filter(r => r.contact === "Existing investor").map(r => ({ org: r.org, category: r.category, location: r.location }));
+      grants = S.rows.filter(r => /^Grant (awarded|applied)/.test(r.status || "")).map(r => ({ org: r.org, status: r.status }));
+      activeCount = counts["Active"] || 0; warmCount = counts["Warm"] || 0;
     }
     if (S.empty) { main.innerHTML = `<div class="card empty">No data yet.</div>`; return; }
-    const order = REL.filter(r => counts[r] && r !== "Not a funder");
+    const order = STATUSES.concat(["No contact", "In contact"]).filter(r => counts[r] && r !== "Not a funder");
     const max = Math.max(1, ...order.map(r => counts[r]));
     main.innerHTML = `
       <div class="head"><div><h1 class="page">Fundraising overview</h1><div class="sub">Brineworks CLA and Series A, ${esc(new Date().toLocaleDateString(undefined, { month: "long", year: "numeric" }))}</div></div></div>
@@ -981,8 +1017,8 @@
         <div class="bars">${order.map(r => `<div class="barrow"><span>${esc(r)}</span><div class="track"><div class="fill" style="width:${(counts[r] / max * 100).toFixed(1)}%"></div></div><span class="mono">${counts[r]}</span></div>`).join("")}</div>
       </div>
       <div class="cols2">
-        <div class="card"><h2 class="sec">Existing investors</h2><ul class="plain">${existing.map(e => `<li><span>${esc(e.org)}</span><span class="conf">${esc([e.type, e.location].filter(Boolean).join(" · "))}</span></li>`).join("") || "<li>None listed</li>"}</ul></div>
-        <div class="card"><h2 class="sec">Grants and public funding</h2><ul class="plain">${grants.map(g => `<li><span>${esc(g.org)}</span><span class="pill ${relClass(g.relationship)}">${esc(g.relationship.replace("Grant ", ""))}</span></li>`).join("") || "<li>None listed</li>"}</ul></div>
+        <div class="card"><h2 class="sec">Existing investors</h2><ul class="plain">${existing.map(e => `<li><span>${esc(e.org)}</span><span class="conf">${esc([e.category || e.type, e.location].filter(Boolean).join(" · "))}</span></li>`).join("") || "<li>None listed</li>"}</ul></div>
+        <div class="card"><h2 class="sec">Grants and public funding</h2><ul class="plain">${grants.map(g => `<li><span>${esc(g.org)}</span><span class="pill ${statusClass(g.status)}">${esc(String(g.status || "").replace("Grant ", ""))}</span></li>`).join("") || "<li>None listed</li>"}</ul></div>
       </div>`;
   }
 
@@ -1083,8 +1119,10 @@
       <tr><td>Opens on</td>${tiers.map(t => `<td><select class="sel" data-t="${t}" data-k="landing" ${locked(t) ? "disabled" : ""}>
         ${[["todos", "To-dos"], ["pipeline", "Pipeline"], ["summary", "Overview"]].map(([v, l]) => `<option value="${v}" ${cfg.tiers[t].landing === v ? "selected" : ""}>${l}</option>`).join("")}</select></td>`).join("")}</tr>
       </tbody></table></div>
-      <div class="card"><h2 class="sec">Live pipeline means these stages</h2>
-        <div class="actions">${REL.map(r => `<label class="chk"><input type="checkbox" data-pipe="${esc(r)}" ${cfg.pipeline_relationships.indexOf(r) >= 0 ? "checked" : ""}> ${esc(r)}</label>`).join("")}</div></div>
+      <div class="card"><h2 class="sec">What the close circle sees</h2>
+        <p class="sub" style="margin:0">Funders that match any ticked contact level or status, plus every funder on an outreach list or with a backchannel.</p>
+        <div class="actions">${CONTACTS.map(r => `<label class="chk"><input type="checkbox" data-pipec="${esc(r)}" ${(cfg.pipeline_contacts || ["Existing investor"]).indexOf(r) >= 0 ? "checked" : ""}> ${esc(r)}</label>`).join("")}</div>
+        <div class="actions">${STATUSES.map(r => `<label class="chk"><input type="checkbox" data-pipes="${esc(r)}" ${(cfg.pipeline_statuses || ["Active", "Warm", "Grant awarded", "Grant applied", "Grant in prep"]).indexOf(r) >= 0 ? "checked" : ""}> ${esc(r)}</label>`).join("")}</div></div>
       <div class="actions"><button class="btn primary" type="button" id="permSave">Save permissions</button><span class="state" id="permMsg"></span></div>`;
     const markDirty = () => setState($("#permMsg"), "Unsaved changes", "");
     $$("input,select", body).forEach(el => el.addEventListener("change", markDirty));
@@ -1097,7 +1135,8 @@
         tc.edit = groups.filter(g => body.querySelector(`[data-t="${t}"][data-k="edit:${g}"]`).checked && tc.view.indexOf(g) >= 0);
         ["can_add", "can_delete", "todos", "admin_page"].forEach(k => { tc[k] = body.querySelector(`[data-t="${t}"][data-k="${k}"]`).checked; });
       });
-      cfg.pipeline_relationships = $$("[data-pipe]", body).filter(x => x.checked).map(x => x.dataset.pipe);
+      cfg.pipeline_contacts = $$("[data-pipec]", body).filter(x => x.checked).map(x => x.dataset.pipec);
+      cfg.pipeline_statuses = $$("[data-pipes]", body).filter(x => x.checked).map(x => x.dataset.pipes);
       const r = await api("config_save", { config: cfg });
       AC.config = { config: r.config };
       setState($("#permMsg"), "Saved. People see the change on their next page load.", "ok");
