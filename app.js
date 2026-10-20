@@ -524,8 +524,8 @@
       </div>
       <div class="chips colfilters" id="colFilters"></div>
       <div class="tablebox"><table class="wide"><thead><tr>
-        ${th("org", "Organisation")}${th("category", "Category")}${th("contact", "Contact")}${th("status", "Status")}${canView("backchannel") ? th("backchannel", "Backchannel") : ""}${th("last_touch_date", "Last touch")}
-        ${showActions ? `${th("next_step_due", "Next step")}${th("ball_in_court", "Next action from")}` : ""}
+        ${th("org", "Organisation", false)}${th("category", "Category")}${th("contact", "Contact")}${th("status", "Status")}${canView("backchannel") ? th("backchannel", "Backchannel") : ""}${th("last_touch_date", "Last touch")}
+        ${showActions ? `${th("next_step", "Next step", false)}${th("next_step_due", "Next step due")}${th("ball_in_court", "Next action from")}` : ""}
       </tr></thead><tbody id="rows"></tbody></table></div>`;
     renderViewChips(); renderColFilters(); renderRows();
     main.querySelector(".strip").onclick = e => { const b = e.target.closest(".stat"); if (!b) return; S.pv.strip = S.pv.strip === b.dataset.f ? "" : b.dataset.f; viewChanged(); renderPipeline(); };
@@ -556,6 +556,8 @@
   const UP = `<svg viewBox="0 0 8 5" width="8" height="5" aria-hidden="true"><path d="M4 0 8 5H0z"/></svg>`;
   const DOWN = `<svg viewBox="0 0 8 5" width="8" height="5" aria-hidden="true"><path d="M0 0h8L4 5z"/></svg>`;
   // Columns in the table header, and the filter each one opens (Organisation filters by category).
+  // Filters for the extra fields shown as chips above the table; the rest only appear there while they're in use (e.g. from a saved view).
+  const CHIP_FILTERS = ["stage_focus", "location", "lead_follow"];
   const HEADER_FILTERS = ["org", "category", "contact", "status", "backchannel", "last_touch_date", "next_step_due", "ball_in_court"];
   function th(k, label, filterable, fkey) {
     fkey = fkey || k;
@@ -570,8 +572,8 @@
   /** Every filter that isn't a table column, as a chip you can click straight away. Filtered ones are highlighted with their values. */
   function renderColFilters() {
     const box = $("#colFilters"); if (!box) return;
-    const fields = filterFields().filter(f => HEADER_FILTERS.indexOf(f[0]) < 0);
-    box.innerHTML = `<span class="conf" style="margin-right:2px">Filter by</span>` + fields.map(f => {
+    const fields = filterFields().filter(f => HEADER_FILTERS.indexOf(f[0]) < 0 && (CHIP_FILTERS.indexOf(f[0]) >= 0 || (S.pv.cols[f[0]] || []).length));
+    box.innerHTML = `<span class="conf" style="margin-right:2px">More filters:</span>` + fields.map(f => {
       const k = f[0], vals = (S.pv.cols[k] || []).filter(v => v !== NONE), on = (S.pv.cols[k] || []).length;
       if (!on) return `<button class="chip" type="button" data-col="${k}">${esc(f[1])} <span class="caret">▾</span></button>`;
       const txt = !vals.length ? "none" : vals.length <= 2 ? vals.join(", ") : `${vals.length} values`;
@@ -761,7 +763,7 @@
     const list = S.rows.filter(matches).sort(cmp);
     $("#count").textContent = `${list.length} of ${S.rows.length}`; updateClearBtn();
     const showBc = canView("backchannel");
-    const cols = 5 + (showBc ? 1 : 0) + (showActions ? 2 : 0);
+    const cols = 5 + (showBc ? 1 : 0) + (showActions ? 3 : 0);
     $("#rows").innerHTML = list.length ? list.map(r => {
       const od = r.next_step_due && r.next_step_due < today();
       const b = ballOf(r), fu = followUp(r), mine = b && b === myShort();
@@ -772,7 +774,8 @@
         <td>${pillBtn("status", r.status, statusClass(r.status))}</td>
         ${showBc ? `<td class="bccol"><button type="button" class="cellbtn" data-pop="backchannel" title="Who can intro? Click to change">${bcCell(r)}</button></td>` : ""}
         <td class="date">${esc(r.last_touch_date || "—")}<div class="conf">${esc(r.last_touch_channel || "")}</div></td>
-        ${showActions ? `<td class="sum"><div class="clamp">${esc(r.next_step || "")}</div>${r.next_step_due ? `<div class="mono ${od ? "overdue" : "conf"}">due ${esc(r.next_step_due)}</div>` : ""}</td>
+        ${showActions ? `<td class="sum"><div class="clamp" title="${esc(r.next_step || "")}">${esc(r.next_step || "")}</div></td>
+        <td class="date ${od ? "overdue" : ""}">${esc(r.next_step_due || "—")}${od ? `<div class="conf overdue">overdue</div>` : ""}</td>
         <td class="ball ${b === "Them" ? "them" : b ? "us" : ""}${mine ? " mine" : ""}">${esc(b || "")}${fu ? `<div class="${fu.due ? "fu due" : "fu"}">${fu.due ? "Follow up? · " : ""}${esc(fu.text)}</div>` : ""}</td>` : ""}
       </tr>`;
     }).join("") : `<tr><td colspan="${cols}" class="empty">Nothing matches these filters.</td></tr>`;
