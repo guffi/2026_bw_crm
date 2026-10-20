@@ -178,7 +178,7 @@
     S.todos = r.todos || null;
     S.lastCheck = Date.now();
     const tp = (S.prefs.todos || {}); S.todoFilter = tp.filter || "all"; S.hideDone = !!tp.hide_done;
-    applyDefaultView();
+    if (!S.viewInit) { applyDefaultView(); S.viewInit = true; }
   }
 
   $("#loginForm").addEventListener("submit", async ev => {
@@ -200,7 +200,7 @@
   function signOut(expired) {
     if (S.token && !expired) { track("logout"); endView(); flush(true); api("logout").catch(() => {}); }
     store.del("crm-token"); store.del("crm-cache");
-    S.token = null; S.user = null; S.tier = null; S.rows = []; S.todos = null; S.summary = null; S.viewAs = null;
+    S.token = null; S.user = null; S.tier = null; S.rows = []; S.todos = null; S.summary = null; S.viewAs = null; S.viewInit = false;
     closeDrawer(); closeModal();
     showOnly("#login");
     if (expired) { $("#loginErr").textContent = "Your session ended. Sign in again."; $("#loginErr").hidden = false; }
@@ -225,8 +225,10 @@
     $("#meBtn").innerHTML = esc(S.user.name.split(" ")[0]) + (S.viewAs ? ` <span class="viewtag">as ${esc(S.tier.label)}</span>` : "") + " ▾";
     renderViewAsBar();
     const ok = pages().map(p => p[0]);
-    const fromHash = location.hash.replace("#", "");
+    const link = parseHash();
+    const fromHash = link.page;
     const first = ok.indexOf(fromHash) >= 0 ? fromHash : (ok.indexOf(S.tier.landing) >= 0 ? S.tier.landing : ok[0]);
+    if (link.view && first === "pipeline") applyLinkView(link.view);
     go(first);
     clearInterval(S.pollTimer); S.pollTimer = setInterval(maybeCheck, 30000);
     clearInterval(S.stampTimer); S.stampTimer = setInterval(stamp, 30000);
@@ -241,7 +243,7 @@
     $("#exitViewAs").onclick = () => setViewAs(null);
   }
   async function setViewAs(tierId) {
-    S.viewAs = tierId; store.del("crm-cache");
+    S.viewAs = tierId; store.del("crm-cache"); S.viewInit = false;
     $("#main").innerHTML = skeleton();
     try { await loadBoot(true); track("view_as", { detail: tierId || "exit" }); start(); }
     catch (e) { toast(e.message, "err"); }
@@ -253,7 +255,47 @@
       `<button type="button" data-go="${id}" ${S.view === id ? 'aria-current="page"' : ""}>${label}${id === "todos" && overdue ? `<span class="n" title="overdue">${overdue}</span>` : ""}</button>`).join("");
   }
   $("#tabs").addEventListener("click", e => { const b = e.target.closest("[data-go]"); if (b) go(b.dataset.go); });
-  window.addEventListener("hashchange", () => { const h = location.hash.replace("#", ""); if (S.user && h && h !== S.view && pages().some(p => p[0] === h)) go(h); });
+  window.addEventListener("hashchange", () => {
+    const link = parseHash(), h = link.page;
+    if (!S.user || !h || !pages().some(p => p[0] === h)) return;
+    if (link.view && h === "pipeline") { applyLinkView(link.view); go(h); return; }
+    if (h !== S.view) go(h);
+  });
+
+  /* ---------- shareable links: #pipeline?view=<encoded filters> ---------- */
+  function parseHash() {
+    const raw = location.hash.replace(/^#/, ""), i = raw.indexOf("?");
+    const page = i < 0 ? raw : raw.slice(0, i);
+    const params = new URLSearchParams(i < 0 ? "" : raw.slice(i + 1));
+    let view = null;
+    const v = params.get("view");
+    if (v) { try { view = JSON.parse(decodeURIComponent(escape(atob(v.replace(/-/g, "+").replace(/_/g, "/"))))); } catch (e) { view = null; } }
+    return { page, view };
+  }
+  function encodeView(st) { return btoa(unescape(encodeURIComponent(JSON.stringify(st)))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, ""); }
+  function viewLink() {
+    const st = viewState();
+    const base = location.origin + location.pathname + "#pipeline";
+    return Object.keys(st).length ? base + "?view=" + encodeView(st) : base;
+  }
+  /** Open a shared view. Filters on fields this person can't see are dropped, so they never hide every row. */
+  function applyLinkView(st) {
+    const v = normaliseView(st), seen = filterFields().map(f => f[0]);
+    Object.keys(v.cols || {}).forEach(k => { if (seen.indexOf(k) < 0) delete v.cols[k]; });
+    if ((v.strip === "us" || v.strip === "overdue" || v.usOnly) && !canView("actions")) { if (v.strip === "us" || v.strip === "overdue") v.strip = ""; v.usOnly = false; }
+    if (v.strip === "nobc" && !S.tier.admin_page) v.strip = "";
+    S.pv = Object.assign({}, DEFAULT_VIEW, v); S.activeView = null; S.viewInit = true;
+    track("open_shared_view", { view: "pipeline", detail: JSON.stringify(v).slice(0, 120) });
+    setTimeout(() => toast("Opened a shared view."), 300);
+  }
+  async function copyViewLink() {
+    const url = viewLink();
+    track("copy_view_link", { view: "pipeline" });
+    try { await navigator.clipboard.writeText(url); toast("Link copied. It opens this exact view after sign-in."); return; } catch (e) { /* show it instead */ }
+    openModal(`<h2>Link to this view</h2><p class="sub" style="margin:0">Opens the pipeline with these filters after sign-in. People only see what their access allows.</p>
+      <input type="text" id="shareUrl" readonly value="${esc(url)}"><div class="actions"><button class="btn" type="button" data-close>Close</button></div>`);
+    const i = $("#shareUrl"); i.focus(); i.select();
+  }
 
   function go(v) {
     S.view = v;
@@ -404,7 +446,7 @@
     const canSaveViews = !S.viewAs;
     main.innerHTML = `
       <div class="head"><div><h1 class="page">Pipeline</h1><div class="sub">${esc(S.tier.label)} view${S.tier.edit.length && !S.viewAs ? " · click a row to edit" : " · read only"}</div></div>
-        <div class="actions">${S.tier.can_add && !S.viewAs ? `<button class="btn" type="button" id="addBtn">Add funder</button>` : ""}${S.tier.edit.length ? `<button class="btn" type="button" id="csvBtn">Export CSV</button>` : ""}</div></div>
+        <div class="actions"><button class="btn" type="button" id="linkBtn" title="Copy a link that opens the pipeline with these filters">Copy link to view</button>${S.tier.can_add && !S.viewAs ? `<button class="btn" type="button" id="addBtn">Add funder</button>` : ""}${S.tier.edit.length ? `<button class="btn" type="button" id="csvBtn">Export CSV</button>` : ""}</div></div>
       <div class="strip">${stats.map(([k, l, n]) => `<button class="stat${(k === "us" || k === "overdue") && n ? " alert" : ""}" type="button" data-f="${k}" aria-pressed="${S.pv.strip === k}"><span class="n">${n}</span><span class="l">${l}</span></button>`).join("")}</div>
       ${canSaveViews ? `<div class="viewsbar"><div class="chips" id="viewChips"></div></div>` : ""}
       <div class="filters">
@@ -431,6 +473,7 @@
     $("#rows").onclick = e => { const tr = e.target.closest("tr[data-id]"); if (tr) openDrawer(tr.dataset.id); };
     $("#rows").onkeydown = e => { if (e.key === "Enter") { const tr = e.target.closest("tr[data-id]"); if (tr) openDrawer(tr.dataset.id); } };
     if ($("#csvBtn")) $("#csvBtn").onclick = exportCsv;
+    $("#linkBtn").onclick = copyViewLink;
     if ($("#addBtn")) $("#addBtn").onclick = addFunder;
   }
 
@@ -491,7 +534,7 @@
     m.innerHTML = `<div class="fhead"><b>${esc(f[1])}</b><span class="conf" id="fsel"></span></div>
       ${sortable ? `<div class="frow"><button type="button" data-sort="1">Sort A → Z</button><button type="button" data-sort="-1">Sort Z → A</button></div>` : ""}
       <input type="search" id="fq" placeholder="Search values" aria-label="Search values">
-      <div class="frow"><button type="button" id="fAll">Select all</button><button type="button" id="fNone">Clear</button></div>
+      <div class="frow"><button type="button" id="fAll">Select all</button><button type="button" id="fNone">Clear</button><button type="button" id="fOnly" title="Keep only the values matching your search">Only matches</button></div>
       <div class="flist" id="flist"></div>
       <div class="frow end"><button type="button" class="btn primary small" id="fDone">Done</button></div>`;
     const list = m.querySelector("#flist"), fq = m.querySelector("#fq"), fsel = m.querySelector("#fsel");
@@ -512,6 +555,7 @@
     };
     m.querySelector("#fAll").onclick = () => { sel = []; apply(); draw(); };
     m.querySelector("#fNone").onclick = () => { sel = [NONE]; apply(); draw(); };
+    m.querySelector("#fOnly").onclick = () => { const v = visible(); sel = v.length ? v.slice() : [NONE]; apply(); draw(); };
     m.querySelector("#fDone").onclick = () => m.close();
     $$("[data-sort]", m).forEach(b => b.onclick = () => { S.pv.sortKey = k; S.pv.sortDir = +b.dataset.sort; viewChanged(); m.close(); renderPipeline(); });
     setTimeout(() => fq.focus(), 0);
