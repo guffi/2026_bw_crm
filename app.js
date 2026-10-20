@@ -623,7 +623,7 @@
       <div class="chips colfilters" id="colFilters"></div>
       <div class="tablebox"><table class="wide"><thead><tr>
         ${th("org", "Organisation", false)}${th("category", "Category")}${th("contact", "Contact")}${th("status", "Status")}${canView("backchannel") ? th("backchannel", "Backchannel") : ""}${th("last_touch_date", "Last touch")}
-        ${showActions ? `${th("next_step", "Next step", false)}${th("next_step_due", "Next step due")}${th("ball_in_court", "Next action from")}` : ""}
+        ${showActions ? `${th("next_step", "Next step", false)}${th("next_step_due", "Next step\ndue")}${th("ball_in_court", "Next action\nfrom")}` : ""}
       </tr></thead><tbody id="rows"></tbody></table></div>`;
     renderViewChips(); renderColFilters(); renderRows();
     main.querySelector(".strip").onclick = e => { const b = e.target.closest(".stat"); if (!b) return; S.pv.strip = S.pv.strip === b.dataset.f ? "" : b.dataset.f; viewChanged(); renderPipeline(); };
@@ -662,7 +662,7 @@
     const on = filterable !== false && (S.pv.cols[fkey] || []).length;
     const sk = S.pv.sortKey === k ? S.pv.sortDir : 0;
     const sorts = `<span class="sorts"><button type="button" class="sbtn${sk > 0 ? " on" : ""}" data-sk="${k}" data-sd="1" aria-label="Sort ${esc(label)} A to Z" title="Sort A → Z">${UP}</button><button type="button" class="sbtn${sk < 0 ? " on" : ""}" data-sk="${k}" data-sd="-1" aria-label="Sort ${esc(label)} Z to A" title="Sort Z → A">${DOWN}</button></span>`;
-    return `<th data-k="${k}" data-fk="${fkey}"${on ? ' class="filtered"' : ""}><div class="thwrap"><span class="thlabel">${esc(label)}</span>${sorts}${filterable === false ? "" : `<button type="button" class="fbtn${on ? " on" : ""}" data-filter="${fkey}" aria-label="Filter ${esc(label)}" title="${on ? "Filtered — click to change" : "Filter"}">${FUNNEL}</button>`}</div></th>`;
+    return `<th data-k="${k}" data-fk="${fkey}"${on ? ' class="filtered"' : ""}><div class="thwrap"><span class="thlabel">${label.split("\n").map(esc).join("<br>")}</span>${sorts}${filterable === false ? "" : `<button type="button" class="fbtn${on ? " on" : ""}" data-filter="${fkey}" aria-label="Filter ${esc(label)}" title="${on ? "Filtered — click to change" : "Filter"}">${FUNNEL}</button>`}</div></th>`;
   }
   function anyFilter() { const v = S.pv; return activeCols().length > 0 || !!v.q || !!v.strip || !!v.usOnly; }
   function updateClearBtn() { const b = $("#clearAllBtn"); if (b) b.hidden = !anyFilter(); }
@@ -835,7 +835,7 @@
   /** A pill that opens a small chooser when the person may edit the field, or a plain pill when they can't. */
   function pillBtn(field, value, cls) {
     const editable = canEdit("core") && !S.viewAs;
-    const inner = value ? `<span class="pill ${cls}">${esc(value)}</span>` : `<span class="conf">${editable ? "Set…" : "—"}</span>`;
+    const inner = value ? `<span class="pill ${cls}">${esc(value)}</span>` : `<span class="conf nowrap">${editable ? (field === "status" ? "Set status" : "Set contact") : "—"}</span>`;
     return editable ? `<button type="button" class="cellbtn" data-pop="${field}" title="Click to change">${inner}<span class="caret">▾</span></button>` : inner;
   }
   function cellPopover(id, field, anchor) {
@@ -873,8 +873,8 @@
         ${showBc ? `<td class="bccol"><button type="button" class="cellbtn" data-pop="backchannel" title="Who can intro? Click to change">${bcCell(r)}</button></td>` : ""}
         <td class="date">${esc(r.last_touch_date || "—")}<div class="conf">${esc(r.last_touch_channel || "")}</div></td>
         ${showActions ? `<td class="sum"><div class="clamp" title="${esc(r.next_step || "")}">${esc(r.next_step || "")}</div></td>
-        <td class="date ${od ? "overdue" : ""}">${esc(r.next_step_due || "—")}${od ? `<div class="conf overdue">overdue</div>` : ""}</td>
-        <td class="ball ${b === "Them" ? "them" : b ? "us" : ""}${mine ? " mine" : ""}">${esc(b || "")}${fu ? `<div class="${fu.due ? "fu due" : "fu"}">${fu.due ? "Follow up? · " : ""}${esc(fu.text)}</div>` : ""}</td>` : ""}
+        <td class="date duecol ${od ? "overdue" : ""}">${esc(r.next_step_due || "—")}${od ? `<div class="conf overdue">overdue</div>` : ""}</td>
+        <td class="ball ${b === "Them" ? "them" : b ? "us" : ""}${mine ? " mine" : ""}">${esc(b || "")}${fu ? `<div class="${fu.due ? "fu due" : "fu"}">${fu.due ? "Follow up?<br>" : ""}${esc(fu.text)}</div>` : ""}</td>` : ""}
       </tr>`;
     }).join("") : `<tr><td colspan="${cols}" class="empty">Nothing matches these filters.</td></tr>`;
   }
