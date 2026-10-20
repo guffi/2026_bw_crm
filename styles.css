@@ -260,3 +260,12 @@ th .fbtn.on,th.filtered .thlabel{color:var(--accent)}
 .fu.due{color:var(--warn);font-weight:600}
 td.bccol{min-width:90px}
 td.bccol .bcline{margin-top:0}
+
+/* Sheets-style header filters */
+th .fbtn{display:inline-flex;align-items:center;opacity:.5;padding:3px 4px}
+th .fbtn svg{fill:none;stroke:currentColor;stroke-width:1.4;stroke-linejoin:round}
+th .fbtn.on{opacity:1;background:var(--accent);color:var(--accent-ink)}
+th .fbtn.on svg{fill:currentColor}
+th.filtered{background:var(--accent-soft)}
+.chip .caret{font-size:10px;color:var(--muted)}
+.linkbtn{border:0;background:none;color:var(--accent);cursor:pointer;font-size:13px;font-weight:600;padding:2px 4px;text-decoration:underline;text-underline-offset:2px}

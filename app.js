@@ -14,7 +14,8 @@
   };
 
   const CONTACTS = ["Existing investor", "In contact", "No contact"];
-  const STATUSES = ["Active", "Warm", "Dormant", "Passed", "Grant in prep", "Grant applied", "Grant awarded", "Grant rejected", "Not a funder"];
+  const PASSED = ["Passed Pre-Seed", "Passed Seed", "Passed CLA", "Passed Series A"];
+  const STATUSES = ["Active", "Warm", "Dormant"].concat(PASSED, ["Grant in prep", "Grant applied", "Grant awarded", "Grant rejected", "Not a funder"]);
   const CATS = ["Investor – VC", "Investor – CVC", "Investor – Angel", "Investor – Family office", "Investor – Accelerator", "Investor – Other", "Grant/Public", "Debt/Bank", "Other"];
   // Before the contact/status split every row had one "relationship"; old saved views and rows are read through these.
   const LEGACY_STATUS = { "Active – Series A/CLA": "Active", "Warm": "Warm", "Dormant": "Dormant", "Passed": "Passed", "Grant awarded": "Grant awarded", "Grant applied": "Grant applied", "Grant in prep": "Grant in prep", "Grant rejected": "Grant rejected", "Not a funder": "Not a funder" };
@@ -62,12 +63,14 @@
   const bcMine = e => S.user && (e.user_id ? e.user_id === S.user.id : String(e.name || "").toLowerCase() === String(S.user.name || "").toLowerCase());
   const OWNERS = ["", "GS", "JTP", "Olga", "Sam", "Ariana"];
   const OWNER_ALIASES = { gudfinnur: ["GS", "Gudfinnur"], joe: ["JTP", "Joe", "Joseph"], olga: ["Olga", "OM"] };
-  const statusClass = s => s === "Active" ? "p-active" : s === "Warm" ? "p-warm" : String(s || "").startsWith("Grant") ? "p-grant" : s === "Passed" ? "p-passed" : "p-idle";
+  const statusClass = s => s === "Active" ? "p-active" : s === "Warm" ? "p-warm" : String(s || "").startsWith("Grant") ? "p-grant" : String(s || "").indexOf("Passed") === 0 ? "p-passed" : "p-idle";
   const contactClass = c => c === "Existing investor" ? "p-existing" : c === "In contact" ? "p-warm" : "p-idle";
   const rank = (list, v) => { const i = list.indexOf(v); return i < 0 ? 99 : i; };
   const fmtTime = iso => { if (!iso) return "—"; const d = new Date(iso); if (isNaN(d)) return String(iso); return d.toLocaleString(undefined, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }); };
   const ago = ms => { const m = Math.round(ms / 60000); if (m < 1) return "just now"; if (m < 60) return m + " min ago"; const h = Math.round(m / 60); return h < 24 ? h + " h ago" : Math.round(h / 24) + " d ago"; };
   const DEFAULT_VIEW = { q: "", cols: {}, usOnly: false, hideNF: true, strip: "", sortKey: "contact", sortDir: 1 };
+  // What the pipeline opens with when you haven't starred a saved view: investors only (no grants, debt or other), existing investors left out.
+  const STARTER_STATE = () => ({ cols: { category: CATS.filter(c => c.indexOf("Investor") === 0), contact: ["In contact", "No contact"] } });
   // Column filters (Google-Sheets style): [field, label, field group, kind]
   const FILTER_FIELDS = [
     ["contact", "Contact", "core"], ["status", "Status", "core"], ["category", "Category", "core"], ["location", "Location", "core"],
@@ -115,6 +118,7 @@
     }
     if (cols.category) { const c = []; cols.category.forEach(v => { if (v === "Investor") CATS.filter(x => x.indexOf("Investor") === 0).forEach(x => c.push(x)); else c.push(v); }); cols.category = c; }
     delete cols.type;
+    if (cols.status && cols.status.indexOf("Passed") >= 0) cols.status = cols.status.filter(v => v !== "Passed").concat(PASSED);
     if (s.sortKey === "relationship") s.sortKey = "contact";
     Object.keys(cols).forEach(k => { if (!Array.isArray(cols[k]) || !cols[k].length) delete cols[k]; });
     s.cols = cols; return s;
@@ -325,7 +329,7 @@
   function viewLink() {
     const st = viewState();
     const base = location.origin + location.pathname + "#pipeline";
-    return Object.keys(st).length ? base + "?view=" + encodeView(st) : base;
+    return base + "?view=" + encodeView(st);
   }
   /** Open a shared view. Filters on fields this person can't see are dropped, so they never hide every row. */
   function applyLinkView(st) {
@@ -432,7 +436,7 @@
   function applyDefaultView() {
     const p = viewsPref();
     const v = p.default && (p.views || []).find(x => x.name === p.default);
-    S.pv = Object.assign({}, DEFAULT_VIEW, normaliseView(v ? v.state : {}));
+    S.pv = Object.assign({}, DEFAULT_VIEW, normaliseView(v ? v.state : STARTER_STATE()));
     S.activeView = v ? v.name : null;
   }
   function viewState() {
@@ -510,11 +514,11 @@
         <input type="search" id="q" placeholder="Search name, person, note…" aria-label="Search" value="${esc(S.pv.q || "")}">
         ${showActions ? `<label class="chk"><input type="checkbox" id="usOnly" ${S.pv.usOnly ? "checked" : ""}> Next action on us</label>` : ""}
         <label class="chk"><input type="checkbox" id="hideNF" ${S.pv.hideNF ? "checked" : ""}> Hide non-funders</label>
-        <span class="count" id="count"></span>
+        <span class="count" id="count"></span><button type="button" class="linkbtn" id="clearAllBtn" hidden>Clear all filters</button>
       </div>
       <div class="chips colfilters" id="colFilters"></div>
       <div class="tablebox"><table class="wide"><thead><tr>
-        ${th("org", "Organisation", false)}${th("contact", "Contact")}${th("status", "Status")}${canView("backchannel") ? th("backchannel", "Backchannel") : ""}${th("last_touch_date", "Last touch")}
+        ${th("org", "Organisation", true, "category")}${th("contact", "Contact")}${th("status", "Status")}${canView("backchannel") ? th("backchannel", "Backchannel") : ""}${th("last_touch_date", "Last touch")}
         ${showActions ? `${th("next_step_due", "Next step")}${th("ball_in_court", "Next action from")}` : ""}
       </tr></thead><tbody id="rows"></tbody></table></div>`;
     renderViewChips(); renderColFilters(); renderRows();
@@ -532,31 +536,43 @@
     if ($("#csvBtn")) $("#csvBtn").onclick = exportCsv;
     $("#linkBtn").onclick = copyViewLink;
     if ($("#addBtn")) $("#addBtn").onclick = addFunder;
+    $("#clearAllBtn").onclick = clearAllFilters;
   }
 
   /* ---------- column filters ---------- */
-  function th(k, label, filterable) {
-    const on = (S.pv.cols[k] || []).length;
+  const FUNNEL = `<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><path d="M2 3h12l-4.6 5.6v4.6l-2.8 1.4v-6z"/></svg>`;
+  // Columns in the table header, and the filter each one opens (Organisation filters by category).
+  const HEADER_FILTERS = ["category", "contact", "status", "backchannel", "last_touch_date", "next_step_due", "ball_in_court"];
+  function th(k, label, filterable, fkey) {
+    fkey = fkey || k;
+    const on = filterable !== false && (S.pv.cols[fkey] || []).length;
     const sorted = S.pv.sortKey === k ? `<span class="sortmark">${S.pv.sortDir > 0 ? "▲" : "▼"}</span>` : "";
-    return `<th data-k="${k}"${on ? ' class="filtered"' : ""}><span class="thlabel">${esc(label)}${sorted}</span>${filterable === false ? "" : `<button type="button" class="fbtn${on ? " on" : ""}" data-filter="${k}" aria-label="Filter ${esc(label)}" title="Filter">${on ? "▼" : "▽"}</button>`}</th>`;
+    return `<th data-k="${k}" data-fk="${fkey}"${on ? ' class="filtered"' : ""}><span class="thlabel">${esc(label)}${sorted}</span>${filterable === false ? "" : `<button type="button" class="fbtn${on ? " on" : ""}" data-filter="${fkey}" aria-label="Filter ${esc(label)}" title="${on ? "Filtered — click to change" : "Filter"}">${FUNNEL}</button>`}</th>`;
   }
+  function anyFilter() { const v = S.pv; return activeCols().length > 0 || !!v.q || !!v.strip || !!v.usOnly; }
+  function updateClearBtn() { const b = $("#clearAllBtn"); if (b) b.hidden = !anyFilter(); }
   function filterFields() { return FILTER_FIELDS.filter(f => canView(f[2])); }
+  /** Every filter that isn't a table column, as a chip you can click straight away. Filtered ones are highlighted with their values. */
   function renderColFilters() {
     const box = $("#colFilters"); if (!box) return;
-    const fields = filterFields(), active = activeCols().filter(k => fields.some(f => f[0] === k));
-    box.innerHTML = active.map(k => {
-      const f = fields.find(x => x[0] === k), vals = S.pv.cols[k].filter(v => v !== NONE);
+    const fields = filterFields().filter(f => HEADER_FILTERS.indexOf(f[0]) < 0 || (f[0] === "category"));
+    box.innerHTML = `<span class="conf" style="margin-right:2px">Filter by</span>` + fields.map(f => {
+      const k = f[0], vals = (S.pv.cols[k] || []).filter(v => v !== NONE), on = (S.pv.cols[k] || []).length;
+      if (!on) return `<button class="chip" type="button" data-col="${k}">${esc(f[1])} <span class="caret">▾</span></button>`;
       const txt = !vals.length ? "none" : vals.length <= 2 ? vals.join(", ") : `${vals.length} values`;
       return `<button class="chip filt" type="button" data-col="${k}" aria-pressed="true"><b>${esc(f[1])}:</b> ${esc(txt)}<span class="x" data-clear="${k}" title="Remove filter">×</span></button>`;
-    }).join("") + `<button class="chip ghost" type="button" id="addFilterBtn">+ Filter</button>${active.length > 1 ? `<button class="chip ghost" type="button" id="clearFiltersBtn">Clear all</button>` : ""}`;
+    }).join("");
     $$("[data-col]", box).forEach(b => b.onclick = e => { const x = e.target.closest("[data-clear]"); if (x) { setCol(x.dataset.clear, []); return; } openColFilter(b.dataset.col, b); });
-    $("#addFilterBtn").onclick = e => addFilterMenu(e.currentTarget);
-    const cb = $("#clearFiltersBtn"); if (cb) cb.onclick = () => { S.pv.cols = {}; viewChanged(); renderPipeline(); };
+    updateClearBtn();
+  }
+  function clearAllFilters() {
+    S.pv = Object.assign({}, S.pv, { cols: {}, q: "", strip: "", usOnly: false });
+    viewChanged(); renderPipeline(); track("clear_filters", { view: "pipeline" });
   }
   function setCol(k, vals) {
     S.pv.cols = Object.assign({}, S.pv.cols); if (vals.length) S.pv.cols[k] = vals; else delete S.pv.cols[k];
     viewChanged(); renderColFilters(); renderRows();
-    const h = $(`th[data-k="${k}"]`); if (h) { h.classList.toggle("filtered", !!vals.length); const b = h.querySelector(".fbtn"); if (b) { b.classList.toggle("on", !!vals.length); b.textContent = vals.length ? "▼" : "▽"; } }
+    const h = $(`th[data-fk="${k}"]`); if (h) { h.classList.toggle("filtered", !!vals.length); const b = h.querySelector(".fbtn"); if (b) b.classList.toggle("on", !!vals.length); }
   }
   function popover(anchor, cls) {
     $$(".menu").forEach(m => m.remove());
@@ -627,14 +643,14 @@
   function renderViewChips() {
     const box = $("#viewChips"); if (!box) return;
     const p = viewsPref(), views = p.views || [];
-    const isDefault = sameState({}, viewState());
-    box.innerHTML = `<button class="chip" type="button" data-view="" aria-pressed="${isDefault && !S.activeView}">All funders${!p.default ? '<span class="star" title="opens by default">★</span>' : ""}</button>`
+    const isDefault = sameState(STARTER_STATE(), viewState());
+    box.innerHTML = `<button class="chip" type="button" data-view="" aria-pressed="${isDefault && !S.activeView}" title="Investors only, existing investors left out">Default${!p.default ? '<span class="star" title="opens by default">★</span>' : ""}</button>`
       + views.map(v => `<button class="chip" type="button" data-view="${esc(v.name)}" aria-pressed="${S.activeView === v.name}">${esc(v.name)}${p.default === v.name ? '<span class="star" title="opens by default">★</span>' : ""}</button>`).join("")
       + `<span class="chip-sep"></span><button class="chip ghost" type="button" id="saveViewBtn">${S.activeView ? "Update or save as…" : "Save this view…"}</button>`
       + ((S.activeView || views.length || p.default) ? `<button class="chip ghost" type="button" id="viewMenuBtn" aria-label="View options">⋯</button>` : "");
     $$("[data-view]", box).forEach(b => b.onclick = () => {
       const name = b.dataset.view;
-      if (!name) { S.pv = Object.assign({}, DEFAULT_VIEW); S.activeView = null; }
+      if (!name) { S.pv = Object.assign({}, DEFAULT_VIEW, normaliseView(STARTER_STATE())); S.activeView = null; }
       else { const v = views.find(x => x.name === name); if (!v) return; S.pv = Object.assign({}, DEFAULT_VIEW, normaliseView(v.state)); S.activeView = name; }
       renderPipeline();
     });
@@ -668,7 +684,7 @@
     m.style.left = Math.min(r.left + window.scrollX, window.innerWidth - 220) + "px"; m.style.top = (r.bottom + window.scrollY + 4) + "px";
     m.innerHTML = (name ? `<button type="button" data-a="default">${p.default === name ? "Stop opening with this view" : "Open the pipeline with this view"}</button>
       <button type="button" data-a="rename">Rename…</button><hr><button type="button" class="danger" data-a="delete">Delete “${esc(name)}”</button>`
-      : `<button type="button" data-a="clearDefault" ${p.default ? "" : "disabled"}>Open the pipeline with all funders</button>`);
+      : `<button type="button" data-a="clearDefault" ${p.default ? "" : "disabled"}>Open the pipeline with the default view</button>`);
     document.body.appendChild(m);
     const close = () => { m.remove(); document.removeEventListener("click", onDoc, true); };
     const onDoc = e => { if (!m.contains(e.target)) close(); };
@@ -677,7 +693,7 @@
       const a = e.target.closest("[data-a]"); if (!a) return; close();
       try {
         if (a.dataset.a === "default") { await savePrefs({ pipeline: { default: p.default === name ? null : name } }); toast(p.default === name ? "Default cleared." : "This view now opens by default."); }
-        if (a.dataset.a === "clearDefault") { await savePrefs({ pipeline: { default: null } }); toast("The pipeline opens with all funders."); }
+        if (a.dataset.a === "clearDefault") { await savePrefs({ pipeline: { default: null } }); toast("The pipeline opens with the default view."); }
         if (a.dataset.a === "delete") { await savePrefs({ pipeline: { views: (p.views || []).filter(v => v.name !== name), default: p.default === name ? null : p.default } }); S.activeView = null; toast("View deleted."); }
         if (a.dataset.a === "rename") {
           openModal(`<h2>Rename view</h2><label class="f">Name <input id="rnName" type="text" value="${esc(name)}" maxlength="40"></label>
@@ -703,7 +719,7 @@
   function renderRows() {
     const showActions = canView("actions");
     const list = S.rows.filter(matches).sort(cmp);
-    $("#count").textContent = `${list.length} of ${S.rows.length}`;
+    $("#count").textContent = `${list.length} of ${S.rows.length}`; updateClearBtn();
     const showBc = canView("backchannel");
     const cols = 4 + (showBc ? 1 : 0) + (showActions ? 2 : 0);
     $("#rows").innerHTML = list.length ? list.map(r => {
