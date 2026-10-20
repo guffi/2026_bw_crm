@@ -269,3 +269,20 @@ th .fbtn.on svg{fill:currentColor}
 th.filtered{background:var(--accent-soft)}
 .chip .caret{font-size:10px;color:var(--muted)}
 .linkbtn{border:0;background:none;color:var(--accent);cursor:pointer;font-size:13px;font-weight:600;padding:2px 4px;text-decoration:underline;text-underline-offset:2px}
+
+/* clearer header controls: sort arrows + funnel (outline = off, solid = filtering) */
+th .thwrap{display:flex;align-items:center;gap:6px}
+th .sorts{display:inline-flex;flex-direction:column;gap:2px;margin-left:2px}
+th .sbtn{border:0;background:none;padding:1px 2px;line-height:0;cursor:pointer;color:var(--muted);opacity:.45;border-radius:2px}
+th .sbtn svg{fill:currentColor}
+th .sbtn:hover{opacity:1;color:var(--ink)}
+th .sbtn.on{opacity:1;color:var(--accent)}
+th .fbtn{opacity:1;padding:3px;border-radius:5px;color:var(--muted);background:none}
+th .fbtn svg{fill:none;stroke:currentColor;stroke-width:1.5;stroke-linejoin:round}
+th .fbtn:hover{color:var(--ink);background:var(--soft)}
+th .fbtn.on{color:var(--accent);background:none}
+th .fbtn.on svg{fill:currentColor}
+th.filtered{background:var(--accent-soft)}
+th.filtered .thlabel{color:var(--accent)}
+td.cat{white-space:nowrap;font-size:13px}
+td.cat .t{display:block;font-size:11px;color:var(--muted)}

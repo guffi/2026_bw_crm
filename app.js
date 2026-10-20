@@ -73,7 +73,7 @@
   const STARTER_STATE = () => ({ cols: { category: CATS.filter(c => c.indexOf("Investor") === 0), contact: ["In contact", "No contact"] } });
   // Column filters (Google-Sheets style): [field, label, field group, kind]
   const FILTER_FIELDS = [
-    ["contact", "Contact", "core"], ["status", "Status", "core"], ["category", "Category", "core"], ["location", "Location", "core"],
+    ["org", "Organisation", "core"], ["contact", "Contact", "core"], ["status", "Status", "core"], ["category", "Category", "core"], ["location", "Location", "core"],
     ["stage_focus", "Stage focus", "core"], ["lead_follow", "Lead / follow", "core"], ["tier", "Origin", "core"],
     ["investor_fit", "Investor fit", "core"], ["campaigns", "Campaign", "core", "multi"], ["backchannel", "Backchannel", "backchannel", "multi"],
     ["last_touch_date", "Last touch", "status", "touch"], ["last_touch_channel", "Channel", "status"],
@@ -476,6 +476,12 @@
     }
     return true;
   }
+  function sortVal(k, r) {
+    if (k === "backchannel") return (r.backchannel || []).map(e => e.name).join(", ").toLowerCase();
+    if (k === "ball_in_court") return ballOf(r).toLowerCase();
+    if (k === "org") return String(r.org || "").toLowerCase();
+    return String(r[k] || "").toLowerCase();
+  }
   function cmp(a, b) {
     const k = S.pv.sortKey, dir = S.pv.sortDir;
     let x, y;
@@ -485,7 +491,7 @@
       x = ka[0] * 100 + ka[1]; y = kb[0] * 100 + kb[1];
       if (x === y) { x = b.last_touch_date || ""; y = a.last_touch_date || ""; }
     }
-    else { x = String(a[k] || ""); y = String(b[k] || ""); if (!x && y) return 1; if (x && !y) return -1; }
+    else { x = sortVal(k, a); y = sortVal(k, b); if (!x && y) return 1; if (x && !y) return -1; }
     return (x < y ? -1 : x > y ? 1 : 0) * dir;
   }
 
@@ -518,7 +524,7 @@
       </div>
       <div class="chips colfilters" id="colFilters"></div>
       <div class="tablebox"><table class="wide"><thead><tr>
-        ${th("org", "Organisation", true, "category")}${th("contact", "Contact")}${th("status", "Status")}${canView("backchannel") ? th("backchannel", "Backchannel") : ""}${th("last_touch_date", "Last touch")}
+        ${th("org", "Organisation")}${th("category", "Category")}${th("contact", "Contact")}${th("status", "Status")}${canView("backchannel") ? th("backchannel", "Backchannel") : ""}${th("last_touch_date", "Last touch")}
         ${showActions ? `${th("next_step_due", "Next step")}${th("ball_in_court", "Next action from")}` : ""}
       </tr></thead><tbody id="rows"></tbody></table></div>`;
     renderViewChips(); renderColFilters(); renderRows();
@@ -529,6 +535,7 @@
     $("#hideNF").onchange = e => { S.pv.hideNF = e.target.checked; viewChanged(); renderRows(); };
     main.querySelector("thead").onclick = e => {
       const fb = e.target.closest("[data-filter]"); if (fb) { e.stopPropagation(); openColFilter(fb.dataset.filter, fb); return; }
+      const sb = e.target.closest("[data-sk]"); if (sb) { e.stopPropagation(); S.pv.sortKey = sb.dataset.sk; S.pv.sortDir = +sb.dataset.sd; viewChanged(); renderPipeline(); return; }
       const th = e.target.closest("th[data-k]"); if (!th) return; const k = th.dataset.k; if (S.pv.sortKey === k) S.pv.sortDir *= -1; else { S.pv.sortKey = k; S.pv.sortDir = k === "last_touch_date" ? -1 : 1; } viewChanged(); renderRows();
     };
     $("#rows").onclick = e => { const tr = e.target.closest("tr[data-id]"); if (tr) openDrawer(tr.dataset.id); };
@@ -540,14 +547,17 @@
   }
 
   /* ---------- column filters ---------- */
-  const FUNNEL = `<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><path d="M2 3h12l-4.6 5.6v4.6l-2.8 1.4v-6z"/></svg>`;
+  const FUNNEL = `<svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="M1.8 2.5h12.4L9.4 8.3v4.9l-2.8 1.5V8.3z"/></svg>`;
+  const UP = `<svg viewBox="0 0 8 5" width="8" height="5" aria-hidden="true"><path d="M4 0 8 5H0z"/></svg>`;
+  const DOWN = `<svg viewBox="0 0 8 5" width="8" height="5" aria-hidden="true"><path d="M0 0h8L4 5z"/></svg>`;
   // Columns in the table header, and the filter each one opens (Organisation filters by category).
-  const HEADER_FILTERS = ["category", "contact", "status", "backchannel", "last_touch_date", "next_step_due", "ball_in_court"];
+  const HEADER_FILTERS = ["org", "category", "contact", "status", "backchannel", "last_touch_date", "next_step_due", "ball_in_court"];
   function th(k, label, filterable, fkey) {
     fkey = fkey || k;
     const on = filterable !== false && (S.pv.cols[fkey] || []).length;
-    const sorted = S.pv.sortKey === k ? `<span class="sortmark">${S.pv.sortDir > 0 ? "▲" : "▼"}</span>` : "";
-    return `<th data-k="${k}" data-fk="${fkey}"${on ? ' class="filtered"' : ""}><span class="thlabel">${esc(label)}${sorted}</span>${filterable === false ? "" : `<button type="button" class="fbtn${on ? " on" : ""}" data-filter="${fkey}" aria-label="Filter ${esc(label)}" title="${on ? "Filtered — click to change" : "Filter"}">${FUNNEL}</button>`}</th>`;
+    const sk = S.pv.sortKey === k ? S.pv.sortDir : 0;
+    const sorts = `<span class="sorts"><button type="button" class="sbtn${sk > 0 ? " on" : ""}" data-sk="${k}" data-sd="1" aria-label="Sort ${esc(label)} A to Z" title="Sort A → Z">${UP}</button><button type="button" class="sbtn${sk < 0 ? " on" : ""}" data-sk="${k}" data-sd="-1" aria-label="Sort ${esc(label)} Z to A" title="Sort Z → A">${DOWN}</button></span>`;
+    return `<th data-k="${k}" data-fk="${fkey}"${on ? ' class="filtered"' : ""}><div class="thwrap"><span class="thlabel">${esc(label)}</span>${sorts}${filterable === false ? "" : `<button type="button" class="fbtn${on ? " on" : ""}" data-filter="${fkey}" aria-label="Filter ${esc(label)}" title="${on ? "Filtered — click to change" : "Filter"}">${FUNNEL}</button>`}</div></th>`;
   }
   function anyFilter() { const v = S.pv; return activeCols().length > 0 || !!v.q || !!v.strip || !!v.usOnly; }
   function updateClearBtn() { const b = $("#clearAllBtn"); if (b) b.hidden = !anyFilter(); }
@@ -555,7 +565,7 @@
   /** Every filter that isn't a table column, as a chip you can click straight away. Filtered ones are highlighted with their values. */
   function renderColFilters() {
     const box = $("#colFilters"); if (!box) return;
-    const fields = filterFields().filter(f => HEADER_FILTERS.indexOf(f[0]) < 0 || (f[0] === "category"));
+    const fields = filterFields().filter(f => HEADER_FILTERS.indexOf(f[0]) < 0);
     box.innerHTML = `<span class="conf" style="margin-right:2px">Filter by</span>` + fields.map(f => {
       const k = f[0], vals = (S.pv.cols[k] || []).filter(v => v !== NONE), on = (S.pv.cols[k] || []).length;
       if (!on) return `<button class="chip" type="button" data-col="${k}">${esc(f[1])} <span class="caret">▾</span></button>`;
@@ -721,12 +731,13 @@
     const list = S.rows.filter(matches).sort(cmp);
     $("#count").textContent = `${list.length} of ${S.rows.length}`; updateClearBtn();
     const showBc = canView("backchannel");
-    const cols = 4 + (showBc ? 1 : 0) + (showActions ? 2 : 0);
+    const cols = 5 + (showBc ? 1 : 0) + (showActions ? 2 : 0);
     $("#rows").innerHTML = list.length ? list.map(r => {
       const od = r.next_step_due && r.next_step_due < today();
       const b = ballOf(r), fu = followUp(r), mine = b && b === myShort();
       return `<tr class="click" tabindex="0" data-id="${esc(r.id)}">
-        <td class="org">${esc(r.org)}<span class="t">${esc([r.category, r.location].filter(Boolean).join(" · "))}</span></td>
+        <td class="org">${esc(r.org)}${r.location ? `<span class="t">${esc(r.location)}</span>` : ""}</td>
+        <td class="cat">${esc(String(r.category || "—").replace("Investor – ", ""))}${String(r.category || "").indexOf("Investor") === 0 ? `<span class="t">Investor</span>` : ""}</td>
         <td><span class="pill ${contactClass(r.contact)}">${esc(r.contact || "—")}</span></td>
         <td>${r.status ? `<span class="pill ${statusClass(r.status)}">${esc(r.status)}</span>` : `<span class="conf">—</span>`}</td>
         ${showBc ? `<td class="bccol">${bcCell(r)}</td>` : ""}
