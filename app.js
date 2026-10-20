@@ -36,7 +36,25 @@
     return r;
   }
   const CHANNELS = ["", "Email", "Meeting", "Call", "Notes", "Logged", "Sheet"];
-  const BALL = ["None", "Us", "Them"];
+  const FOLLOW_UP_DAYS = 5;
+  // "Next action from": a person who uses the CRM (from the backend), or "Them" when we're waiting on the funder.
+  const FALLBACK_PEOPLE = ["Gudfinnur", "Olga", "Joe", "Hampus"];
+  const people = () => (S.people && S.people.length ? S.people.map(p => p.short) : FALLBACK_PEOPLE);
+  const ballOptions = () => [""].concat(people(), ["Them"]);
+  const myShort = () => { const me = (S.people || []).find(p => S.user && p.id === S.user.id); return me ? me.short : S.user ? S.user.name.split(" ")[0] : ""; };
+  const ballOf = r => { const b = r.ball_in_court; return !b || b === "None" ? "" : b; };
+  const onUs = r => { const b = ballOf(r); return !!b && b !== "Them"; };
+  const daysSince = d => d ? Math.floor((Date.parse(today()) - Date.parse(d)) / 86400000) : null;
+  /** Waiting on them for more than 5 days with no promised date (or the promised date has passed): time to check whether to follow up. */
+  function followUp(r) {
+    if (ballOf(r) !== "Them") return null;
+    const back = r.reply_expected_by;
+    if (back && back >= today()) return { due: false, text: "back by " + back };
+    const since = r.waiting_since || r.last_touch_date, n = daysSince(since);
+    if (back && back < today()) return { due: true, text: "said by " + back };
+    if (n != null && n > FOLLOW_UP_DAYS) return { due: true, text: n + "d waiting" };
+    return n != null ? { due: false, text: n + "d waiting" } : null;
+  }
   const CONF = ["", "High", "Medium", "Low"];
   const FIT = ["", "High", "Medium-High", "Medium", "Low-Medium", "Low"];
   const BC_STRENGTHS = ["strong", "medium", "weak"];
@@ -56,13 +74,15 @@
     ["stage_focus", "Stage focus", "core"], ["lead_follow", "Lead / follow", "core"], ["tier", "Origin", "core"],
     ["investor_fit", "Investor fit", "core"], ["campaigns", "Campaign", "core", "multi"], ["backchannel", "Backchannel", "backchannel", "multi"],
     ["last_touch_date", "Last touch", "status", "touch"], ["last_touch_channel", "Channel", "status"],
-    ["next_step_due", "Next step due", "actions", "due"], ["owner", "Owner", "actions"], ["ball_in_court", "Ball in court", "actions"],
+    ["next_step_due", "Next step due", "actions", "due"], ["owner", "Owner", "actions"], ["ball_in_court", "Next action from", "actions"], ["followup", "Follow-up check", "actions"],
     ["confidence", "Confidence", "internal"], ["intro_from", "Intro from", "internal"],
   ];
   const BLANK = "(blank)", NONE = "\u0000none";
   const TOUCH_BUCKETS = ["This week", "This month", "Last 3 months", "Last year", "Older", BLANK];
   const DUE_BUCKETS = ["Overdue", "This week", "Later", BLANK];
   function colValue(field, r) {
+    if (field === "followup") { const f = followUp(r); return !f ? BLANK : f.due ? "Check follow-up" : "Waiting (fine)"; }
+    if (field === "ball_in_court") return ballOf(r) || BLANK;
     const v = r[field];
     if (field === "last_touch_date") {
       if (!v) return BLANK;
@@ -204,7 +224,7 @@
     S.user = r.user; S.tier = r.tier; S.meta = r.meta; S.prefs = r.prefs || {}; S.viewAs = r.view_as || null;
     if (r.data) { S.rows = (r.data.rows || []).map(upgradeRow); S.summary = r.data.summary; S.empty = !!r.data.empty; writeCache(); }
     else if (cache) { S.rows = cache.rows.map(upgradeRow); S.summary = cache.summary; S.empty = !!cache.empty; }
-    S.todos = r.todos || null;
+    S.todos = r.todos || null; S.people = r.people || S.people || null;
     S.lastCheck = Date.now();
     const tp = (S.prefs.todos || {}); S.todoFilter = tp.filter || "all"; S.hideDone = !!tp.hide_done;
     if (!S.viewInit) { applyDefaultView(); S.viewInit = true; }
@@ -311,7 +331,7 @@
   function applyLinkView(st) {
     const v = normaliseView(st), seen = filterFields().map(f => f[0]);
     Object.keys(v.cols || {}).forEach(k => { if (seen.indexOf(k) < 0) delete v.cols[k]; });
-    if ((v.strip === "us" || v.strip === "overdue" || v.usOnly) && !canView("actions")) { if (v.strip === "us" || v.strip === "overdue") v.strip = ""; v.usOnly = false; }
+    if ((["us", "mine", "followup", "overdue"].indexOf(v.strip) >= 0 || v.usOnly) && !canView("actions")) { v.strip = ""; v.usOnly = false; }
     if (v.strip === "nobc" && !S.tier.admin_page) v.strip = "";
     S.pv = Object.assign({}, DEFAULT_VIEW, v); S.activeView = null; S.viewInit = true;
     track("open_shared_view", { view: "pipeline", detail: JSON.stringify(v).slice(0, 120) });
@@ -433,14 +453,16 @@
     if (v.hideNF && r.status === "Not a funder") return false;
     const cols = v.cols || {};
     for (const k in cols) { if (k === skipCol || !cols[k] || !cols[k].length) continue; if (!colValues(k, r).some(x => cols[k].indexOf(x) >= 0)) return false; }
-    if (v.usOnly && r.ball_in_court !== "Us") return false;
+    if (v.usOnly && !onUs(r)) return false;
     const st = v.strip;
     if (st === "active" && r.status !== "Active") return false;
     if (st === "existing" && r.contact !== "Existing investor") return false;
     if (st === "incontact" && r.contact !== "In contact") return false;
     if (st === "warm" && r.status !== "Warm") return false;
     if (st === "grants" && !String(r.status || "").startsWith("Grant")) return false;
-    if (st === "us" && r.ball_in_court !== "Us") return false;
+    if (st === "us" && !onUs(r)) return false;
+    if (st === "mine" && ballOf(r) !== myShort()) return false;
+    if (st === "followup" && !((followUp(r) || {}).due)) return false;
     if (st === "overdue" && !(r.next_step_due && r.next_step_due < today())) return false;
     if (st === "mybc" && !(r.backchannel || []).some(bcMine)) return false;
     if (st === "nobc" && (r.backchannel || []).length) return false;
@@ -473,7 +495,7 @@
     }
     const c = k => S.rows.filter(k).length;
     const stats = [["existing", "Existing investors", c(r => r.contact === "Existing investor")], ["incontact", "In contact", c(r => r.contact === "In contact" && r.status !== "Not a funder")], ["active", "Active round", c(r => r.status === "Active")], ["warm", "Warm", c(r => r.status === "Warm")], ["grants", "Grants", c(r => String(r.status || "").startsWith("Grant"))]];
-    if (showActions) stats.push(["us", "We owe a reply", c(r => r.ball_in_court === "Us")], ["overdue", "Next step overdue", c(r => r.next_step_due && r.next_step_due < today())]);
+    if (showActions) stats.push(["mine", "Next action: me", c(r => ballOf(r) === myShort())], ["followup", "Check follow-up", c(r => (followUp(r) || {}).due)], ["overdue", "Next step overdue", c(r => r.next_step_due && r.next_step_due < today())]);
     if (canView("backchannel")) {
       stats.push(["mybc", "I can intro", c(r => (r.backchannel || []).some(bcMine))]);
       if (S.tier.admin_page) stats.push(["nobc", "No backchannel yet", c(r => !(r.backchannel || []).length && r.status !== "Not a funder")]);
@@ -486,14 +508,14 @@
       ${canSaveViews ? `<div class="viewsbar"><div class="chips" id="viewChips"></div></div>` : ""}
       <div class="filters">
         <input type="search" id="q" placeholder="Search name, person, note…" aria-label="Search" value="${esc(S.pv.q || "")}">
-        ${showActions ? `<label class="chk"><input type="checkbox" id="usOnly" ${S.pv.usOnly ? "checked" : ""}> We owe a reply</label>` : ""}
+        ${showActions ? `<label class="chk"><input type="checkbox" id="usOnly" ${S.pv.usOnly ? "checked" : ""}> Next action on us</label>` : ""}
         <label class="chk"><input type="checkbox" id="hideNF" ${S.pv.hideNF ? "checked" : ""}> Hide non-funders</label>
         <span class="count" id="count"></span>
       </div>
       <div class="chips colfilters" id="colFilters"></div>
       <div class="tablebox"><table class="wide"><thead><tr>
-        ${th("org", "Organisation", false)}${th("contact", "Contact · status")}<th>Status notes</th>${th("last_touch_date", "Last touch")}
-        ${showActions ? `${th("next_step_due", "Next step")}${th("owner", "Owner")}${th("ball_in_court", "Ball")}` : ""}
+        ${th("org", "Organisation", false)}${th("contact", "Contact")}${th("status", "Status")}${canView("backchannel") ? th("backchannel", "Backchannel") : ""}${th("last_touch_date", "Last touch")}
+        ${showActions ? `${th("next_step_due", "Next step")}${th("ball_in_court", "Next action from")}` : ""}
       </tr></thead><tbody id="rows"></tbody></table></div>`;
     renderViewChips(); renderColFilters(); renderRows();
     main.querySelector(".strip").onclick = e => { const b = e.target.closest(".stat"); if (!b) return; S.pv.strip = S.pv.strip === b.dataset.f ? "" : b.dataset.f; viewChanged(); renderPipeline(); };
@@ -675,23 +697,26 @@
   function bcCell(r) {
     const list = canView("backchannel") ? (r.backchannel || []) : [];
     if (!list.length) return "";
-    return `<span class="bcline" title="Backchannel">${list.map(e => `<span class="bc${bcMine(e) ? " me" : ""}${e.strength ? " s-" + esc(e.strength) : ""}">${esc(e.name.split(" ")[0])}${e.strength ? `<i>${esc(e.strength[0].toUpperCase())}</i>` : ""}</span>`).join("")}</span>`;
+    return `<span class="bcline">${list.map(e => `<span class="bc${bcMine(e) ? " me" : ""}${e.strength ? " s-" + esc(e.strength) : ""}">${esc(e.name.split(" ")[0])}${e.strength ? `<i>${esc(e.strength[0].toUpperCase())}</i>` : ""}</span>`).join("")}</span>`;
   }
 
   function renderRows() {
     const showActions = canView("actions");
     const list = S.rows.filter(matches).sort(cmp);
     $("#count").textContent = `${list.length} of ${S.rows.length}`;
-    const cols = showActions ? 7 : 4;
+    const showBc = canView("backchannel");
+    const cols = 4 + (showBc ? 1 : 0) + (showActions ? 2 : 0);
     $("#rows").innerHTML = list.length ? list.map(r => {
       const od = r.next_step_due && r.next_step_due < today();
+      const b = ballOf(r), fu = followUp(r), mine = b && b === myShort();
       return `<tr class="click" tabindex="0" data-id="${esc(r.id)}">
-        <td class="org">${esc(r.org)}<span class="t">${esc([r.category, r.location].filter(Boolean).join(" · "))}</span>${bcCell(r)}</td>
-        <td><span class="pill ${contactClass(r.contact)}">${esc(r.contact || "—")}</span>${r.status ? `<div style="margin-top:4px"><span class="pill ${statusClass(r.status)}">${esc(r.status)}</span></div>` : ""}${r.confidence ? `<div class="conf">${esc(r.confidence)}${r.tier === "Imported" ? " · imported" : ""}</div>` : ""}</td>
-        <td class="sum"><div class="clamp">${esc(r.status_summary || "")}</div></td>
+        <td class="org">${esc(r.org)}<span class="t">${esc([r.category, r.location].filter(Boolean).join(" · "))}</span></td>
+        <td><span class="pill ${contactClass(r.contact)}">${esc(r.contact || "—")}</span></td>
+        <td>${r.status ? `<span class="pill ${statusClass(r.status)}">${esc(r.status)}</span>` : `<span class="conf">—</span>`}</td>
+        ${showBc ? `<td class="bccol">${bcCell(r)}</td>` : ""}
         <td class="date">${esc(r.last_touch_date || "—")}<div class="conf">${esc(r.last_touch_channel || "")}</div></td>
         ${showActions ? `<td class="sum"><div class="clamp">${esc(r.next_step || "")}</div>${r.next_step_due ? `<div class="mono ${od ? "overdue" : "conf"}">due ${esc(r.next_step_due)}</div>` : ""}</td>
-        <td>${esc(r.owner || "")}</td><td class="ball ${r.ball_in_court === "Us" ? "us" : "them"}">${r.ball_in_court === "Us" ? "Us" : r.ball_in_court === "Them" ? "Them" : ""}</td>` : ""}
+        <td class="ball ${b === "Them" ? "them" : b ? "us" : ""}${mine ? " mine" : ""}">${esc(b || "")}${fu ? `<div class="${fu.due ? "fu due" : "fu"}">${fu.due ? "Follow up? · " : ""}${esc(fu.text)}</div>` : ""}</td>` : ""}
       </tr>`;
     }).join("") : `<tr><td colspan="${cols}" class="empty">Nothing matches these filters.</td></tr>`;
   }
@@ -701,7 +726,7 @@
     core: [["org", "Name", "text", "wide"], ["contact", "Contact", CONTACTS], ["status", "Status", [""].concat(STATUSES)], ["category", "Category", CATS], ["location", "Location", "text"], ["ticket_size", "Ticket size", "text"], ["stage_focus", "Stage focus", "text"], ["lead_follow", "Lead / follow", "text"], ["rounds", "Rounds (comma separated)", "list", "wide"], ["aliases", "Other names (comma separated)", "list", "wide"],
       ["parent_group", "Parent group", "text"], ["investor_fit", "Investor fit", FIT], ["fit_note", "Why it fits", "area", "wide"], ["strategic_angle", "Strategic angle (pilot, offtake, partner)", "area", "wide"], ["campaigns", "Campaigns / lists (comma separated)", "list", "wide"]],
     status: [["status_summary", "Status notes", "area", "wide"], ["last_touch_date", "Last touch", "date"], ["last_touch_channel", "Channel", CHANNELS], ["last_touch_note", "Last touch note", "text", "wide"]],
-    actions: [["next_step", "Next step", "text", "wide"], ["next_step_due", "Due", "date"], ["owner", "Owner", OWNERS], ["ball_in_court", "Ball in court", BALL]],
+    actions: [["next_step", "Next step", "text", "wide"], ["next_step_due", "Due", "date"], ["owner", "Owner", OWNERS], ["ball_in_court", "Next action from", "ball"], ["reply_expected_by", "They said they'd come back by", "date"], ["waiting_since", "Waiting on them since", "date"]],
     contacts: [["contacts", "People — one per line: Name | role | email | LinkedIn", "contacts", "wide"]],
     internal: [["notes", "Notes", "area", "wide"], ["objections", "Objections", "area", "wide"], ["intro_from", "Intro from", "text"], ["first_contact_date", "First contact", "date"], ["confidence", "Confidence", CONF], ["category_note", "Note on category", "text", "wide"]],
     sources: [["sources", "Sources — one per line: type | label | link or ref | date", "sources", "wide"]],
@@ -743,7 +768,8 @@
       const inputs = FIELDS[g].map(([f, label, kind, wide]) => {
         const v = fieldValue(r, f, kind);
         let ctl;
-        if (Array.isArray(kind)) { const opts = kind.indexOf(v) >= 0 || v === "" ? kind : kind.concat([v]); ctl = `<select data-f="${f}" data-kind="select">${opts.map(o => `<option value="${esc(o)}" ${o === v ? "selected" : ""}>${esc(o || "—")}</option>`).join("")}</select>`; }
+        if (kind === "ball") { const opts = ballOptions(); const cur = ballOf(r); const all = opts.indexOf(cur) >= 0 ? opts : opts.concat([cur]); ctl = `<select data-f="${f}" data-kind="select">${all.map(o => `<option value="${esc(o)}" ${o === cur ? "selected" : ""}>${esc(o || "—")}</option>`).join("")}</select>`; }
+        else if (Array.isArray(kind)) { const opts = kind.indexOf(v) >= 0 || v === "" ? kind : kind.concat([v]); ctl = `<select data-f="${f}" data-kind="select">${opts.map(o => `<option value="${esc(o)}" ${o === v ? "selected" : ""}>${esc(o || "—")}</option>`).join("")}</select>`; }
         else if (kind === "area" || kind === "contacts" || kind === "sources") ctl = `<textarea data-f="${f}" data-kind="${kind}">${esc(v)}</textarea>`;
         else ctl = `<input data-f="${f}" data-kind="${kind}" type="${kind === "date" ? "date" : "text"}" value="${esc(v)}">`;
         return `<label class="f ${wide || ""}">${esc(label)} ${ctl}</label>`;
@@ -870,7 +896,7 @@
   }
 
   function exportCsv() {
-    const cols = ["org", "category", "category_note", "contact", "status", "location", "parent_group", "investor_fit", "campaigns", "backchannel", "status_summary", "last_touch_date", "last_touch_note", "ball_in_court", "next_step", "next_step_due", "owner", "ticket_size", "stage_focus", "lead_follow", "rounds", "objections", "intro_from", "notes", "contacts", "confidence"];
+    const cols = ["org", "category", "category_note", "contact", "status", "location", "parent_group", "investor_fit", "campaigns", "backchannel", "status_summary", "last_touch_date", "last_touch_note", "ball_in_court", "waiting_since", "reply_expected_by", "next_step", "next_step_due", "owner", "ticket_size", "stage_focus", "lead_follow", "rounds", "objections", "intro_from", "notes", "contacts", "confidence"];
     const visible = cols.filter(c => S.rows.some(r => c in r));
     const cell = (v, k) => { if (k === "backchannel" && Array.isArray(v)) v = v.map(bcLabel); if (Array.isArray(v)) v = v.map(x => x && typeof x === "object" ? Object.values(x).filter(Boolean).join(" | ") : x).join("; "); v = v == null ? "" : String(v); return /[",\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; };
     const rows = S.rows.filter(matches).sort(cmp);
