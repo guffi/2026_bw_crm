@@ -74,13 +74,26 @@
   // Column filters (Google-Sheets style): [field, label, field group, kind]
   const FILTER_FIELDS = [
     ["org", "Organisation", "core"], ["contact", "Contact", "core"], ["status", "Status", "core"], ["category", "Category", "core"], ["location", "Location", "core"],
-    ["stage_focus", "Stage focus", "core"], ["lead_follow", "Lead / follow", "core"], ["tier", "Origin", "core"],
+    ["stage_focus", "Stage", "core", "multi"], ["lead_follow", "Lead / follow", "core"], ["tier", "Origin", "core"],
     ["investor_fit", "Investor fit", "core"], ["campaigns", "Campaign", "core", "multi"], ["backchannel", "Backchannel", "backchannel", "multi"],
     ["last_touch_date", "Last touch", "status", "touch"], ["last_touch_channel", "Channel", "status"],
     ["next_step_due", "Next step due", "actions", "due"], ["owner", "Owner", "actions"], ["ball_in_court", "Next action from", "actions"], ["followup", "Follow-up check", "actions"],
     ["confidence", "Confidence", "internal"], ["intro_from", "Intro from", "internal"],
   ];
   const BLANK = "(blank)", NONE = "\u0000none";
+  // Stage tags. Stored on the row as one comma-separated string in stage_focus, always in this order.
+  const STAGES = ["Pre-seed", "Seed", "Series A", "Series B", "Series C and later", "CLA"];
+  const STAGE_SHORT = { "Pre-seed": "Pre-seed", "Seed": "Seed", "Series A": "A", "Series B": "B", "Series C and later": "C+", "CLA": "CLA" };
+  function stagesOf(r) {
+    const v = r && r.stage_focus; const parts = Array.isArray(v) ? v : String(v || "").split(/[,;]/);
+    const have = parts.map(x => String(x).trim().toLowerCase());
+    return STAGES.filter(t => have.indexOf(t.toLowerCase()) >= 0);
+  }
+  const stagesStr = list => STAGES.filter(t => list.indexOf(t) >= 0).join(", ");
+  function stagePills(r) {
+    const t = stagesOf(r);
+    return t.map(x => `<span class="stg${x === "CLA" ? " cla" : ""}" title="${esc(x)}">${esc(STAGE_SHORT[x])}</span>`).join("");
+  }
   const TOUCH_BUCKETS = ["This week", "This month", "Last 3 months", "Last year", "Older", BLANK];
   const DUE_BUCKETS = ["Overdue", "This week", "Later", BLANK];
   function colValue(field, r) {
@@ -102,10 +115,11 @@
   /** Every filter value a row has: one for plain fields, several for list fields (campaigns, backchannel people). */
   function colValues(field, r) {
     if (field === "campaigns") { const v = (r.campaigns || []).filter(Boolean); return v.length ? v : [BLANK]; }
+    if (field === "stage_focus") { const v = stagesOf(r); return v.length ? v : [BLANK]; }
     if (field === "backchannel") { const v = (r.backchannel || []).map(e => e && e.name).filter(Boolean); return v.length ? v : [BLANK]; }
     return [colValue(field, r)];
   }
-  function bucketOrder(field) { return field === "last_touch_date" ? TOUCH_BUCKETS : field === "next_step_due" ? DUE_BUCKETS : field === "contact" ? CONTACTS.concat([BLANK]) : field === "status" ? STATUSES.concat([BLANK]) : field === "category" ? CATS.concat([BLANK]) : field === "investor_fit" ? FIT.slice(1).concat([BLANK]) : null; }
+  function bucketOrder(field) { return field === "last_touch_date" ? TOUCH_BUCKETS : field === "next_step_due" ? DUE_BUCKETS : field === "contact" ? CONTACTS.concat([BLANK]) : field === "status" ? STATUSES.concat([BLANK]) : field === "category" ? CATS.concat([BLANK]) : field === "stage_focus" ? STAGES.concat([BLANK]) : field === "investor_fit" ? FIT.slice(1).concat([BLANK]) : null; }
   // Old saved views had rel/cat selects; fold them into cols.
   function normaliseView(st) {
     const s = Object.assign({}, st || {}); const cols = Object.assign({}, s.cols || {});
@@ -622,7 +636,7 @@
       </div>
       <div class="chips colfilters" id="colFilters"></div>
       <div class="tablebox"><table class="wide"><thead><tr>
-        ${th("org", "Organisation", false)}${th("category", "Category")}${th("contact", "Contact")}${th("status", "Status")}${canView("backchannel") ? th("backchannel", "Backchannel") : ""}${th("last_touch_date", "Last touch")}
+        ${th("org", "Organisation", false)}${th("category", "Category")}${th("stage_focus", "Stage")}${th("contact", "Contact")}${th("status", "Status")}${canView("backchannel") ? th("backchannel", "Backchannel") : ""}${th("last_touch_date", "Last touch")}
         ${showActions ? `${th("next_step", "Next step", false)}${th("next_step_due", "Next step\ndue")}${th("ball_in_court", "Next action\nfrom")}` : ""}
       </tr></thead><tbody id="rows"></tbody></table></div>`;
     renderViewChips(); renderColFilters(); renderRows();
@@ -655,8 +669,8 @@
   const DOWN = `<svg viewBox="0 0 8 5" width="8" height="5" aria-hidden="true"><path d="M0 0h8L4 5z"/></svg>`;
   // Columns in the table header, and the filter each one opens (Organisation filters by category).
   // Filters for the extra fields shown as chips above the table; the rest only appear there while they're in use (e.g. from a saved view).
-  const CHIP_FILTERS = ["stage_focus", "location", "lead_follow"];
-  const HEADER_FILTERS = ["org", "category", "contact", "status", "backchannel", "last_touch_date", "next_step_due", "ball_in_court"];
+  const CHIP_FILTERS = ["location", "lead_follow"];
+  const HEADER_FILTERS = ["org", "category", "stage_focus", "contact", "status", "backchannel", "last_touch_date", "next_step_due", "ball_in_court"];
   function th(k, label, filterable, fkey) {
     fkey = fkey || k;
     const on = filterable !== false && (S.pv.cols[fkey] || []).length;
@@ -838,8 +852,23 @@
     const inner = value ? `<span class="pill ${cls}">${esc(value)}</span>` : `<span class="conf nowrap">${editable ? (field === "status" ? "Set status" : "Set contact") : "—"}</span>`;
     return editable ? `<button type="button" class="cellbtn" data-pop="${field}" title="Click to change">${inner}<span class="caret">▾</span></button>` : inner;
   }
+  function stageCell(r) {
+    const editable = canEdit("core") && !S.viewAs, inner = stagePills(r) || `<span class="conf nowrap">${editable ? "Set stage" : "—"}</span>`;
+    return editable ? `<button type="button" class="cellbtn" data-pop="stage_focus" title="Click to change">${inner}</button>` : inner;
+  }
   function cellPopover(id, field, anchor) {
     const r = S.rows.find(x => x.id === id); if (!r) return;
+    if (field === "stage_focus") {
+      const m = popover(anchor, "pickmenu stagemenu"); let sel = stagesOf(r);
+      const draw = () => { m.innerHTML = `<div class="fhead"><b>Stage</b><span class="conf">${esc(r.org)}</span></div>` + STAGES.map(t => `<button type="button" data-v="${esc(t)}" class="${sel.indexOf(t) >= 0 ? "cur" : ""}"><span class="tick">${sel.indexOf(t) >= 0 ? "✓" : ""}</span>${esc(t)}</button>`).join(""); };
+      draw();
+      m.onclick = e => {
+        const b = e.target.closest("[data-v]"); if (!b) return;
+        const t = b.dataset.v; sel = sel.indexOf(t) >= 0 ? sel.filter(x => x !== t) : sel.concat([t]); draw();
+        queueEdit(id, "stage_focus", stagesStr(sel) || null); renderRows();
+      };
+      return;
+    }
     if (field === "backchannel") {
       const m = popover(anchor, "bcmenu");
       m.innerHTML = bcSection(r, true); wireBc(id, m, true);
@@ -861,13 +890,14 @@
     const list = S.rows.filter(matches).sort(cmp);
     $("#count").textContent = `${list.length} of ${S.rows.length}`; updateClearBtn();
     const showBc = canView("backchannel");
-    const cols = 5 + (showBc ? 1 : 0) + (showActions ? 3 : 0);
+    const cols = 6 + (showBc ? 1 : 0) + (showActions ? 3 : 0);
     $("#rows").innerHTML = list.length ? list.map(r => {
       const od = r.next_step_due && r.next_step_due < today();
       const b = ballOf(r), fu = followUp(r), mine = b && b === myShort();
       return `<tr class="click" tabindex="0" data-id="${esc(r.id)}">
         <td class="org">${esc(r.org)}${r.location ? `<span class="t">${esc(r.location)}</span>` : ""}</td>
         <td class="cat">${esc(String(r.category || "—").replace("Investor – ", ""))}${String(r.category || "").indexOf("Investor") === 0 ? `<span class="t">Investor</span>` : ""}</td>
+        <td class="stgcol">${stageCell(r)}</td>
         <td>${pillBtn("contact", r.contact, contactClass(r.contact))}</td>
         <td>${pillBtn("status", r.status, statusClass(r.status))}</td>
         ${showBc ? `<td class="bccol"><button type="button" class="cellbtn" data-pop="backchannel" title="Who can intro? Click to change">${bcCell(r)}</button></td>` : ""}
@@ -881,7 +911,7 @@
 
   /* ---------- drawer ---------- */
   const FIELDS = {
-    core: [["org", "Name", "text", "wide"], ["contact", "Contact", CONTACTS], ["status", "Status", [""].concat(STATUSES)], ["category", "Category", CATS], ["location", "Location", "text"], ["ticket_size", "Ticket size", "text"], ["stage_focus", "Stage focus", "text"], ["lead_follow", "Lead / follow", "text"], ["rounds", "Rounds (comma separated)", "list", "wide"], ["aliases", "Other names (comma separated)", "list", "wide"],
+    core: [["org", "Name", "text", "wide"], ["contact", "Contact", CONTACTS], ["status", "Status", [""].concat(STATUSES)], ["category", "Category", CATS], ["location", "Location", "text"], ["ticket_size", "Ticket size", "text"], ["stage_focus", "Stage", "stages", "wide"], ["lead_follow", "Lead / follow", "text"], ["rounds", "Rounds (comma separated)", "list", "wide"], ["aliases", "Other names (comma separated)", "list", "wide"],
       ["parent_group", "Parent group", "text"], ["investor_fit", "Investor fit", FIT], ["fit_note", "Why it fits", "area", "wide"], ["strategic_angle", "Strategic angle (pilot, offtake, partner)", "area", "wide"], ["campaigns", "Campaigns / lists (comma separated)", "list", "wide"]],
     status: [["status_summary", "Status notes", "area", "wide"], ["last_touch_date", "Last touch", "date"], ["last_touch_channel", "Channel", CHANNELS], ["last_touch_note", "Last touch note", "text", "wide"]],
     actions: [["next_step", "Next step", "text", "wide"], ["next_step_due", "Due", "date"], ["owner", "Owner", OWNERS], ["ball_in_court", "Next action from", "ball"], ["reply_expected_by", "They said they'd come back by", "date"], ["waiting_since", "Waiting on them since", "date"]],
@@ -899,6 +929,7 @@
     return v == null ? "" : v;
   }
   function parseField(kind, text) {
+    if (kind === "stages") return text || null;
     if (kind === "list") return text.split(",").map(s => s.trim()).filter(Boolean);
     if (kind === "contacts") return text.split("\n").map(l => l.split("|").map(s => s.trim())).filter(p => p[0] || p[2]).map(p => Object.assign({ name: p[0] || "", role: p[1] || "", email: p[2] || "" }, p[3] ? { linkedin: p[3] } : {}));
     if (kind === "sources") return text.split("\n").map(l => l.split("|").map(s => s.trim())).filter(p => p[1] || p[2]).map(p => ({ type: p[0] || "note", label: p[1] || "", ref: p[2] || "", date: p[3] || null }));
@@ -928,6 +959,7 @@
         let ctl;
         if (kind === "ball") { const opts = ballOptions(); const cur = ballOf(r); const all = opts.indexOf(cur) >= 0 ? opts : opts.concat([cur]); ctl = `<select data-f="${f}" data-kind="select">${all.map(o => `<option value="${esc(o)}" ${o === cur ? "selected" : ""}>${esc(o || "—")}</option>`).join("")}</select>`; }
         else if (Array.isArray(kind)) { const opts = kind.indexOf(v) >= 0 || v === "" ? kind : kind.concat([v]); ctl = `<select data-f="${f}" data-kind="select">${opts.map(o => `<option value="${esc(o)}" ${o === v ? "selected" : ""}>${esc(o || "—")}</option>`).join("")}</select>`; }
+        else if (kind === "stages") { const cur = stagesOf(r); ctl = `<input type="hidden" data-f="${f}" data-kind="stages" value="${esc(stagesStr(cur))}"><span class="stagepick">${STAGES.map(t => `<label class="chk"><input type="checkbox" data-stg="${esc(t)}" ${cur.indexOf(t) >= 0 ? "checked" : ""}> ${esc(t)}</label>`).join("")}</span>`; }
         else if (kind === "area" || kind === "contacts" || kind === "sources") ctl = `<textarea data-f="${f}" data-kind="${kind}">${esc(v)}</textarea>`;
         else ctl = `<input data-f="${f}" data-kind="${kind}" type="${kind === "date" ? "date" : "text"}" value="${esc(v)}">`;
         return `<label class="f ${wide || ""}">${esc(label)} ${ctl}</label>`;
@@ -956,6 +988,10 @@
     root.hidden = false;
     wireBc(id, $("#bcBox"));
     $$("[data-f]", root).forEach(el => el.addEventListener("change", () => queueEdit(id, el.dataset.f, parseField(el.dataset.kind, el.value))));
+    $$(".stagepick", root).forEach(box => box.addEventListener("change", () => {
+      const h = box.previousElementSibling; h.value = stagesStr($$("[data-stg]", box).filter(c => c.checked).map(c => c.dataset.stg));
+      h.dispatchEvent(new Event("change"));
+    }));
     if ($("#touchBtn")) $("#touchBtn").onclick = () => {
       const d = today(); const inp = root.querySelector('[data-f="last_touch_date"]'); if (inp) inp.value = d;
       const ch = root.querySelector('[data-f="last_touch_channel"]'); if (ch) ch.value = "Logged";
