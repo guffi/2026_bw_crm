@@ -568,7 +568,11 @@
     const v = S.pv, q = (v.q || "").toLowerCase();
     if (v.hideNF && r.status === "Not a funder") return false;
     const cols = v.cols || {};
-    for (const k in cols) { if (k === skipCol || !cols[k] || !cols[k].length) continue; if (!colValues(k, r).some(x => cols[k].indexOf(x) >= 0)) return false; }
+    for (const k in cols) {
+      if (k === skipCol || !cols[k] || !cols[k].length) continue;
+      if (k === "stage_not") { if (skipCol !== "stage_focus" && stagesOf(r).some(x => cols[k].indexOf(x) >= 0)) return false; continue; }
+      if (!colValues(k, r).some(x => cols[k].indexOf(x) >= 0)) return false;
+    }
     if (v.usOnly && !onUs(r)) return false;
     const st = v.strip;
     if (st === "active" && r.status !== "Active") return false;
@@ -673,7 +677,7 @@
   const HEADER_FILTERS = ["org", "category", "stage_focus", "contact", "status", "backchannel", "last_touch_date", "next_step_due", "ball_in_court"];
   function th(k, label, filterable, fkey) {
     fkey = fkey || k;
-    const on = filterable !== false && (S.pv.cols[fkey] || []).length;
+    const on = filterable !== false && ((S.pv.cols[fkey] || []).length || (fkey === "stage_focus" && (S.pv.cols.stage_not || []).length));
     const sk = S.pv.sortKey === k ? S.pv.sortDir : 0;
     const sorts = `<span class="sorts"><button type="button" class="sbtn${sk > 0 ? " on" : ""}" data-sk="${k}" data-sd="1" aria-label="Sort ${esc(label)} A to Z" title="Sort A → Z">${UP}</button><button type="button" class="sbtn${sk < 0 ? " on" : ""}" data-sk="${k}" data-sd="-1" aria-label="Sort ${esc(label)} Z to A" title="Sort Z → A">${DOWN}</button></span>`;
     return `<th data-k="${k}" data-fk="${fkey}"${on ? ' class="filtered"' : ""}><div class="thwrap"><span class="thlabel">${label.split("\n").map(esc).join("<br>")}</span>${sorts}${filterable === false ? "" : `<button type="button" class="fbtn${on ? " on" : ""}" data-filter="${fkey}" aria-label="Filter ${esc(label)}" title="${on ? "Filtered — click to change" : "Filter"}">${FUNNEL}</button>`}</div></th>`;
@@ -701,7 +705,8 @@
   function setCol(k, vals) {
     S.pv.cols = Object.assign({}, S.pv.cols); if (vals.length) S.pv.cols[k] = vals; else delete S.pv.cols[k];
     viewChanged(); renderColFilters(); renderRows();
-    const h = $(`th[data-fk="${k}"]`); if (h) { h.classList.toggle("filtered", !!vals.length); const b = h.querySelector(".fbtn"); if (b) b.classList.toggle("on", !!vals.length); }
+    const fk = k === "stage_not" ? "stage_focus" : k, onNow = !!((S.pv.cols[fk] || []).length || (fk === "stage_focus" && (S.pv.cols.stage_not || []).length));
+    const h = $(`th[data-fk="${fk}"]`); if (h) { h.classList.toggle("filtered", onNow); const b = h.querySelector(".fbtn"); if (b) b.classList.toggle("on", onNow); }
   }
   function popover(anchor, cls) {
     $$(".menu").forEach(m => m.remove());
@@ -722,7 +727,33 @@
     m.innerHTML = filterFields().map(f => `<button type="button" data-f="${f[0]}" ${used.indexOf(f[0]) >= 0 ? 'class="used"' : ""}>${esc(f[1])}${used.indexOf(f[0]) >= 0 ? " ✓" : ""}</button>`).join("");
     m.onclick = e => { const b = e.target.closest("[data-f]"); if (!b) return; m.close(); openColFilter(b.dataset.f, anchor); };
   }
+  /** Stage filter: per tag, "Has" (any of these) or "Not" (none of these). Seed + not Series A = seed-only funds. */
+  function openStageFilter(anchor) {
+    const m = popover(anchor, "fmenu stagefilter");
+    const draw = () => {
+      const inc = S.pv.cols.stage_focus || [], exc = S.pv.cols.stage_not || [];
+      const n = S.rows.filter(r => matches(r)).length;
+      m.innerHTML = `<div class="fhead"><b>Stage</b><span class="conf">${n} funds match</span></div>
+        <div class="sub" style="padding:0 8px 6px">Has = any of these · Not = none of these</div>
+        ${STAGES.map(t => { const st = inc.indexOf(t) >= 0 ? "has" : exc.indexOf(t) >= 0 ? "not" : "";
+          return `<div class="sfrow"><span>${esc(t)}</span><span class="seg"><button type="button" class="segb${st === "has" ? " on" : ""}" data-t="${esc(t)}" data-m="has">Has</button><button type="button" class="segb${st === "not" ? " on not" : ""}" data-t="${esc(t)}" data-m="not">Not</button></span></div>`; }).join("")}
+        <div class="frow end"><button type="button" id="sfClear">Clear</button><button type="button" class="btn primary small" id="sfDone">Done</button></div>`;
+    };
+    draw();
+    m.onclick = e => {
+      if (e.target.closest("#sfDone")) return m.close();
+      if (e.target.closest("#sfClear")) { S.pv.cols = Object.assign({}, S.pv.cols); delete S.pv.cols.stage_not; setCol("stage_focus", []); draw(); return; }
+      const b = e.target.closest("[data-m]"); if (!b) return;
+      const t = b.dataset.t, mode = b.dataset.m;
+      let inc = (S.pv.cols.stage_focus || []).filter(x => x !== t), exc = (S.pv.cols.stage_not || []).filter(x => x !== t);
+      const was = (S.pv.cols.stage_focus || []).indexOf(t) >= 0 ? "has" : (S.pv.cols.stage_not || []).indexOf(t) >= 0 ? "not" : "";
+      if (was !== mode) (mode === "has" ? inc : exc).push(t);
+      S.pv.cols = Object.assign({}, S.pv.cols); if (exc.length) S.pv.cols.stage_not = exc; else delete S.pv.cols.stage_not;
+      setCol("stage_focus", inc); draw();
+    };
+  }
   function openColFilter(k, anchor) {
+    if (k === "stage_focus") return openStageFilter(anchor);
     const f = FILTER_FIELDS.find(x => x[0] === k); if (!f || !canView(f[2])) return;
     const m = popover(anchor, "fmenu");
     // counts over rows that pass every other filter (as in Sheets)

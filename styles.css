@@ -345,3 +345,11 @@ td.stgcol .cellbtn{display:flex;flex-wrap:wrap;max-width:160px;text-align:left}
 .menu.stagemenu .tick{display:inline-block;width:16px;color:var(--accent);font-weight:700}
 .stagepick{display:flex;flex-wrap:wrap;gap:4px 12px;margin-top:4px}
 .stagepick .chk{font-weight:400}
+
+.menu.stagefilter{width:280px}
+.stagefilter .sfrow{display:flex;justify-content:space-between;align-items:center;padding:4px 8px}
+.stagefilter .seg{display:inline-flex;border:1px solid var(--line);border-radius:6px;overflow:hidden}
+.stagefilter .segb{border:0;background:none;padding:3px 10px;font-size:12.5px;cursor:pointer;color:var(--muted)}
+.stagefilter .segb+.segb{border-left:1px solid var(--line)}
+.stagefilter .segb.on{background:var(--accent);color:#fff}
+.stagefilter .segb.on.not{background:var(--bad)}
