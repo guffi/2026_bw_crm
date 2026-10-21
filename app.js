@@ -1077,6 +1077,8 @@
   }
   function renderTodos() {
     const main = $("#main");
+    if (S.todoEditing && document.body.contains(S.todoEditing)) { S.todoRenderPending = true; return; }
+    S.todoEditing = null; S.todoRenderPending = false;
     if (!S.todos) { main.innerHTML = `<div class="empty">To-dos aren’t available for this view.</div>`; return; }
     const items = S.todos.items || [];
     const t = today();
@@ -1139,6 +1141,8 @@
     $$("[data-dismiss]", main).forEach(b => b.onclick = () => setTodo(b.dataset.dismiss, { status: "dismissed" }));
     $$("[data-org]", main).forEach(b => b.onclick = () => { if (S.rows.some(r => r.id === b.dataset.org)) openDrawer(b.dataset.org); });
     $$("[data-owner]", main).forEach(s => s.onchange = () => setTodo(s.dataset.owner, { owner: s.value }));
+    $$("[data-duepop]", main).forEach(b => b.onclick = e => { e.stopPropagation(); duePopover(b.dataset.duepop, b); });
+    $$("[data-tedit]", main).forEach(el => el.onclick = e => { if (e.target.closest("a,button")) return; todoInlineEdit(el.dataset.tedit, el.dataset.tf, el); });
   }
   let todoPrefT = null;
   function saveTodoPrefs() { clearTimeout(todoPrefT); todoPrefT = setTimeout(() => { if (!S.viewAs) savePrefs({ todos: { filter: S.todoFilter, hide_done: S.hideDone } }).catch(() => {}); }, 800); }
@@ -1149,12 +1153,13 @@
     const srcHtml = src ? (/^https?:\/\//.test(src.ref || "") ? `<a href="${esc(src.ref)}" target="_blank" rel="noopener noreferrer">${esc(src.label || "source")}</a>` : `<span title="${esc(src.ref || "")}">${esc((src.type ? src.type + ": " : "") + (src.label || src.ref || ""))}</span>`) : "";
     const orgHtml = i.org ? (i.org_id && S.rows.some(r => r.id === i.org_id) ? `<button class="linklike" type="button" data-org="${esc(i.org_id)}">${esc(i.org)}</button>` : `<span>${esc(i.org)}</span>`) : "";
     const ownerOpts = OWNERS.filter(Boolean).indexOf(i.owner) >= 0 || !i.owner ? OWNERS : OWNERS.concat([i.owner]);
+    const edit = !ro && i.status === "open";
     return `<div class="todo ${i.status !== "open" ? "done" : ""}">
       <input type="checkbox" data-id="${esc(i.id)}" ${i.status !== "open" ? "checked" : ""} ${ro ? "disabled" : ""} aria-label="Done">
-      <div><div class="title">${esc(i.title)}</div>
+      <div><div class="title${edit ? " editable" : ""}" ${edit ? `data-tedit="${esc(i.id)}" data-tf="title" title="Click to edit"` : ""}>${esc(i.title)}</div>
         <div class="meta">${orgHtml}${srcHtml}${i.scanned_by ? `<span class="conf" title="Added by a scheduled scan">${esc(i.scanned_by.replace(/ scan$/i, ""))} scan</span>` : ""}${i.status !== "open" && i.done_by ? `<span>${i.status === "dismissed" ? "Dismissed" : "Done"} by ${esc(i.done_by.split(" ")[0])}</span>` : ""}</div>
-        ${i.detail ? `<div class="detail clamp">${esc(i.detail)}</div>` : ""}</div>
-      <div class="side">${i.due ? `<span class="due ${late ? "late" : ""}">${esc(i.due)}</span>` : ""}
+        ${i.detail ? `<div class="detail clamp${edit ? " editable" : ""}" ${edit ? `data-tedit="${esc(i.id)}" data-tf="detail" title="Click to edit"` : ""}>${esc(i.detail)}</div>` : edit ? `<div class="detail adddetail" data-tedit="${esc(i.id)}" data-tf="detail">+ Add description</div>` : ""}</div>
+      <div class="side">${edit ? `<button type="button" class="due duebtn ${late ? "late" : ""}${i.due ? "" : " nodue"}" data-duepop="${esc(i.id)}" title="Change due date">${i.due ? esc(i.due) : "Set date"}</button>` : i.due ? `<span class="due ${late ? "late" : ""}">${esc(i.due)}</span>` : ""}
         ${i.status === "open" && !ro ? `<select class="sel" style="padding:2px 4px;font-size:12px" data-owner="${esc(i.id)}" aria-label="Owner">${ownerOpts.map(o => `<option value="${esc(o)}" ${o === (i.owner || "") ? "selected" : ""}>${esc(o || "—")}</option>`).join("")}</select>
         <button class="linklike" type="button" data-dismiss="${esc(i.id)}">Dismiss</button>` : (i.status === "open" ? `<span class="conf">${esc(i.owner || "")}</span>` : "")}</div>
     </div>`;
@@ -1162,6 +1167,48 @@
   function setTodo(id, fields) {
     enqueue("todo_update", { id, fields });
     renderTabs(); renderTodos();
+  }
+  function duePopover(id, anchor) {
+    const item = S.todos.items.find(i => i.id === id); if (!item) return;
+    const plus = n => new Date(Date.now() + n * 864e5).toISOString().slice(0, 10);
+    const m = popover(anchor, "duemenu");
+    m.innerHTML = `<div class="fhead"><b>Due date</b></div>
+      <input type="date" class="dueIn" value="${esc(item.due || "")}" aria-label="Due date">
+      <div class="quick">${[["Today", 0], ["Tomorrow", 1], ["+1 week", 7], ["+2 weeks", 14]].map(([l, n]) => `<button type="button" class="chip" data-q="${plus(n)}">${l}</button>`).join("")}</div>
+      <div class="actions">${item.due ? `<button type="button" class="linklike" data-clear="1">Clear date</button>` : ""}<span style="flex:1"></span><button type="button" class="btn small" data-cancel="1">Cancel</button><button type="button" class="btn small primary" data-save="1">Save</button></div>`;
+    const inp = m.querySelector(".dueIn"); setTimeout(() => inp.focus(), 0);
+    const save = v => { m.close(); v = v || null; if ((item.due || null) !== v) setTodo(id, { due: v }); };
+    m.onclick = e => {
+      const q = e.target.closest("[data-q]"); if (q) { inp.value = q.dataset.q; return; }
+      if (e.target.closest("[data-cancel]")) return m.close();
+      if (e.target.closest("[data-clear]")) return save(null);
+      if (e.target.closest("[data-save]")) return save(inp.value);
+    };
+    inp.onkeydown = e => { if (e.key === "Enter") { e.preventDefault(); save(inp.value); } };
+  }
+  function todoInlineEdit(id, field, el) {
+    const item = S.todos.items.find(i => i.id === id); if (!item || S.todoEditing) return;
+    const orig = item[field] || "";
+    const box = document.createElement("div"); box.className = "tedit";
+    box.innerHTML = `<textarea class="tedit-in ${field}" rows="1" maxlength="${field === "title" ? 300 : 600}" placeholder="${field === "title" ? "To-do" : "Description"}"></textarea>
+      <div class="actions"><button type="button" class="btn small" data-cancel="1">Cancel</button><button type="button" class="btn small primary" data-save="1">Save</button><span class="conf">${field === "title" ? "Enter to save" : "⌘/Ctrl+Enter to save"} · Esc to cancel</span></div>`;
+    const ta = box.querySelector("textarea"); ta.value = orig;
+    const fit = () => { ta.style.height = "auto"; ta.style.height = ta.scrollHeight + "px"; };
+    el.replaceWith(box); S.todoEditing = box; fit(); ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length);
+    const done = () => { S.todoEditing = null; renderTodos(); };
+    const save = () => {
+      let v = ta.value.trim(); if (field === "title") v = v.replace(/\s*\n\s*/g, " ");
+      if (field === "title" && !v) { ta.focus(); return; }
+      S.todoEditing = null;
+      if (v !== orig) setTodo(id, { [field]: v }); else renderTodos();
+    };
+    ta.oninput = fit;
+    ta.onkeydown = e => {
+      if (e.key === "Escape") { e.preventDefault(); done(); }
+      else if (e.key === "Enter" && (field === "title" ? !e.shiftKey : (e.metaKey || e.ctrlKey))) { e.preventDefault(); save(); }
+    };
+    box.querySelector("[data-cancel]").onclick = done;
+    box.querySelector("[data-save]").onclick = save;
   }
 
   /* ---------- overview ---------- */
